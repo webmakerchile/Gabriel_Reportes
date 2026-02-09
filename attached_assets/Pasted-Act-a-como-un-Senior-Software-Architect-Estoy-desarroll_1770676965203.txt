@@ -1,0 +1,39 @@
+Actúa como un Senior Software Architect. Estoy desarrollando una plataforma de Business Intelligence para mi cliente, Gabriel Hoyos, quien gestiona a múltiples clientes propios a través del ERP Obuma. El objetivo es que Gabriel tenga un centro de mando para auditar y reportar la rentabilidad de sus operaciones.
+
+1. Infraestructura y Persistencia (PostgreSQL):
+
+Configura PostgreSQL como motor principal. La base de datos debe ser el 'Single Source of Truth'.
+
+Respaldo de Información: Cada dato extraído de Obuma debe guardarse en tablas históricas (ventas_historico, costos_historico) para que Gabriel no pierda información si la API de Obuma llega a tener downtime.
+
+Utiliza variables de entorno (.env) para la API Key proporcionada: ff5bfe7710dd17ac298f60bd469b7b9b.
+
+2. Lógica de Producto para Gabriel Hoyos:
+
+Módulo ETL: Crea scripts en Python para consumir los endpoints de /ventas, /productos, /compras y /contabilidad.
+
+Cálculo de Margen Neto: El sistema debe cruzar las ventas con los costos de adquisición para entregar a Gabriel el margen real de operación de sus clientes.
+
+Auditoría de Cifras: Implementa una función que compare los totales de la API contra los registros de PostgreSQL para asegurar que no haya discrepancias en los reportes de Gabriel.
+
+3. Automatización de Reportes Excel (Daily Delivery):
+
+Desarrolla un sistema que, de forma automática a las 23:50 (Hora Chile), genere archivos Excel profesionales.
+
+Estos reportes deben estar listos para que Gabriel se los reenvíe a sus clientes finales, incluyendo: Resumen de ventas, Utilidad neta del día y Alertas de stock.
+
+4. Arquitectura Escalable (Futura Web App de Clientes):
+
+Estructura Multi-Tenant: Diseña la base de datos pensando en que, en el futuro, los clientes de Gabriel tendrán sus propios usuarios. Agrega una tabla de clientes_finales y relaciona todas las transacciones con un cliente_id.
+
+Backend API-First: Usa FastAPI para que toda la lógica esté disponible vía endpoints. Esto permitirá que más adelante Gabriel pueda ofrecer una App móvil o Web App donde sus clientes inicien sesión para ver su propia data.
+
+5. Dashboard de Control (Streamlit):
+
+Crea una interfaz donde Gabriel pueda visualizar:
+
+El rendimiento consolidado de sus cuentas.
+
+Gráficos de ingresos vs. egresos (basado en API Contabilidad).
+
+Un gestor de descargas de los reportes Excel históricos almacenados en la base de datos."
