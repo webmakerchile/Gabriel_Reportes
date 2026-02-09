@@ -39,13 +39,24 @@ class SyncService:
             self.db.flush()
         return cliente.id
 
+    def _extract_items(self, data, *keys):
+        if data is None:
+            return []
+        if isinstance(data, list):
+            return data
+        for key in keys:
+            val = data.get(key)
+            if val is not None:
+                return val if isinstance(val, list) else []
+        return []
+
     async def sync_productos(self) -> dict:
         data = await self.client.get_productos()
-        if "error" in data:
-            self._log_sync("productos", 0, 0, 0, estado="error", detalle=str(data["error"]))
+        if isinstance(data, dict) and "error" in data:
+            self._log_sync("productos", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = data if isinstance(data, list) else data.get("data", data.get("productos", []))
+        items = self._extract_items(data, "data", "productos")
         count = 0
         for item in items:
             obuma_id = str(item.get("id", ""))
@@ -110,11 +121,11 @@ class SyncService:
 
     async def sync_ventas(self) -> dict:
         data = await self.client.get_ventas()
-        if "error" in data:
-            self._log_sync("ventas", 0, 0, 0, estado="error", detalle=str(data["error"]))
+        if isinstance(data, dict) and "error" in data:
+            self._log_sync("ventas", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = data if isinstance(data, list) else data.get("data", data.get("ventas", []))
+        items = self._extract_items(data, "data", "ventas")
         count = 0
         total_api = 0.0
         for item in items:
@@ -177,11 +188,11 @@ class SyncService:
 
     async def sync_compras(self) -> dict:
         data = await self.client.get_compras()
-        if "error" in data:
-            self._log_sync("compras", 0, 0, 0, estado="error", detalle=str(data["error"]))
+        if isinstance(data, dict) and "error" in data:
+            self._log_sync("compras", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = data if isinstance(data, list) else data.get("data", data.get("compras", []))
+        items = self._extract_items(data, "data", "compras")
         count = 0
         for item in items:
             obuma_id = str(item.get("id", item.get("folio_dcto", "")))
@@ -220,11 +231,11 @@ class SyncService:
 
     async def sync_contabilidad(self, fecha_desde: str = None) -> dict:
         data = await self.client.get_contabilidad(fecha_desde)
-        if "error" in data:
-            self._log_sync("contabilidad", 0, 0, 0, estado="error", detalle=str(data["error"]))
+        if isinstance(data, dict) and "error" in data:
+            self._log_sync("contabilidad", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = data if isinstance(data, list) else data.get("data", data.get("asientos", []))
+        items = self._extract_items(data, "data", "asientos")
         count = 0
         for item in items:
             fecha_str = item.get("fecha", None)

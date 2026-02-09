@@ -16,7 +16,10 @@ class ObumaClient:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(url, headers=self.headers, params=params)
                 response.raise_for_status()
-                return response.json()
+                result = response.json()
+                if result is None:
+                    return {"data": [], "message": "API returned null"}
+                return result
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error {e.response.status_code} on {endpoint}: {e}")
             return {"error": str(e), "status_code": e.response.status_code}
