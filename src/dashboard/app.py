@@ -3,9 +3,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
-from sqlalchemy import func, text
+from sqlalchemy import func
 import os
 import sys
+import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -28,12 +29,125 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .main-header { font-size: 2rem; font-weight: bold; color: #2F5496; margin-bottom: 0.5rem; }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.2rem; border-radius: 12px; color: white; text-align: center;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    .stApp {
+        font-family: 'Inter', sans-serif;
     }
-    .stMetric { background-color: #f8f9fa; padding: 1rem; border-radius: 8px; border-left: 4px solid #2F5496; }
+    .main-title {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #1a1a2e;
+        margin-bottom: 0.2rem;
+        letter-spacing: -0.5px;
+    }
+    .subtitle {
+        font-size: 0.95rem;
+        color: #6b7280;
+        margin-bottom: 1.5rem;
+    }
+    .metric-container {
+        background: white;
+        border-radius: 12px;
+        padding: 1.2rem 1.5rem;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        transition: box-shadow 0.2s;
+    }
+    .metric-container:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .metric-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #1a1a2e;
+        margin: 0;
+    }
+    .metric-label {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin: 0;
+    }
+    .metric-green { color: #059669 !important; }
+    .metric-red { color: #dc2626 !important; }
+    .metric-blue { color: #2563eb !important; }
+    .metric-amber { color: #d97706 !important; }
+
+    .section-header {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #374151;
+        margin: 1.5rem 0 0.8rem 0;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e5e7eb;
+    }
+    .card {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .sync-badge {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .badge-ok { background: #d1fae5; color: #065f46; }
+    .badge-error { background: #fee2e2; color: #991b1b; }
+    .badge-warning { background: #fef3c7; color: #92400e; }
+
+    .sidebar .sidebar-content {
+        background: #f8fafc;
+    }
+    div[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    }
+    div[data-testid="stSidebar"] .stMarkdown p,
+    div[data-testid="stSidebar"] .stMarkdown h1,
+    div[data-testid="stSidebar"] .stMarkdown h2,
+    div[data-testid="stSidebar"] .stMarkdown h3 {
+        color: white;
+    }
+    div[data-testid="stSidebar"] .stRadio label {
+        color: #e2e8f0 !important;
+    }
+    div[data-testid="stSidebar"] hr {
+        border-color: rgba(255,255,255,0.1);
+    }
+
+    .stDataFrame {
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    div[data-testid="stMetric"] {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 1rem 1.2rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
+        border: none;
+        border-radius: 8px;
+        padding: 0.5rem 1.5rem;
+        font-weight: 600;
+    }
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: 500;
+    }
+
+    .status-anulada { color: #dc2626; font-weight: 600; }
+    .status-vigente { color: #059669; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -42,18 +156,39 @@ def get_db():
     return SessionLocal()
 
 
-st.sidebar.markdown("## 📊 BI Platform")
+def run_async(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def format_clp(value):
+    if value is None:
+        return "$0"
+    return f"${value:,.0f}".replace(",", ".")
+
+
+st.sidebar.markdown("### 📊 BI Platform")
 st.sidebar.markdown("**Gabriel Hoyos**")
+st.sidebar.caption("Centro de Mando Empresarial")
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
-    "Navegación",
-    ["Dashboard", "Ventas", "Contabilidad", "Reportes", "Sincronización", "Auditoría"],
-    index=0
+    "Navegacion",
+    ["Dashboard", "Ventas", "Clientes", "Contabilidad", "Reportes", "Sincronizacion", "Auditoria"],
+    index=0,
+    label_visibility="collapsed"
 )
 
+st.sidebar.markdown("---")
+st.sidebar.caption("v1.0 | Powered by Obuma ERP")
+
 if page == "Dashboard":
-    st.markdown('<p class="main-header">Centro de Mando</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Centro de Mando</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Vista consolidada del rendimiento de todas las cuentas</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
@@ -63,34 +198,45 @@ if page == "Dashboard":
         n_clientes = db.query(ClienteFinal).filter(ClienteFinal.activo == True).count()
         n_productos = db.query(Producto).filter(Producto.activo == True).count()
         n_ventas = db.query(VentaHistorico).count()
+        ventas_anuladas = db.query(VentaHistorico).filter(VentaHistorico.anulada == True).count()
+        ventas_vigentes = n_ventas - ventas_anuladas
+        total_pagado = db.query(func.sum(VentaHistorico.total_pagado)).scalar() or 0
+        total_por_pagar = db.query(func.sum(VentaHistorico.total_por_pagar)).scalar() or 0
         alertas_stock = db.query(Producto).filter(
             Producto.stock_actual <= Producto.stock_minimo,
             Producto.activo == True
         ).count()
+        margen_pct = (total_margen / total_ventas * 100) if total_ventas else 0
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Ventas", f"${total_ventas:,.0f}")
-        col2.metric("Total Compras", f"${total_compras:,.0f}")
-        col3.metric("Margen Neto", f"${total_margen:,.0f}")
-        col4.metric("Clientes Activos", n_clientes)
+        col1.metric("Ventas Totales", format_clp(total_ventas))
+        col2.metric("Compras Totales", format_clp(total_compras))
+        col3.metric("Margen Neto", format_clp(total_margen))
+        col4.metric("Margen %", f"{margen_pct:.1f}%")
 
         col5, col6, col7, col8 = st.columns(4)
-        col5.metric("Productos", n_productos)
-        col6.metric("Transacciones", n_ventas)
-        col7.metric("Alertas Stock", alertas_stock)
-        margen_pct = (total_margen / total_ventas * 100) if total_ventas else 0
-        col8.metric("Margen %", f"{margen_pct:.1f}%")
+        col5.metric("Clientes", n_clientes)
+        col6.metric("Documentos", n_ventas)
+        col7.metric("Vigentes", ventas_vigentes)
+        col8.metric("Anuladas", ventas_anuladas)
+
+        if total_pagado or total_por_pagar:
+            st.markdown("---")
+            cp1, cp2, cp3 = st.columns(3)
+            cp1.metric("Total Pagado", format_clp(total_pagado))
+            cp2.metric("Por Pagar", format_clp(total_por_pagar))
+            cp3.metric("Productos", n_productos)
 
         st.markdown("---")
-
         col_left, col_right = st.columns(2)
 
         with col_left:
-            st.subheader("Ventas por Fecha")
+            st.markdown('<p class="section-header">Ventas por Fecha</p>', unsafe_allow_html=True)
             ventas_data = db.query(
                 func.date(VentaHistorico.fecha).label("fecha"),
                 func.sum(VentaHistorico.total).label("total"),
-                func.sum(VentaHistorico.margen_neto).label("margen")
+                func.sum(VentaHistorico.margen_neto).label("margen"),
+                func.count(VentaHistorico.id).label("cantidad")
             ).filter(
                 VentaHistorico.fecha.isnot(None)
             ).group_by(
@@ -101,18 +247,30 @@ if page == "Dashboard":
 
             if ventas_data:
                 df_ventas = pd.DataFrame([
-                    {"Fecha": str(v.fecha), "Ventas": v.total or 0, "Margen": v.margen or 0}
+                    {"Fecha": str(v.fecha), "Ventas": v.total or 0, "Margen": v.margen or 0, "Docs": v.cantidad}
                     for v in ventas_data
                 ])
-                fig = px.bar(df_ventas, x="Fecha", y=["Ventas", "Margen"],
-                            barmode="group", color_discrete_sequence=["#2F5496", "#4CAF50"])
-                fig.update_layout(height=350, margin=dict(t=20, b=20))
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=df_ventas["Fecha"], y=df_ventas["Ventas"],
+                                     name="Ventas", marker_color="#2563eb"))
+                fig.add_trace(go.Bar(x=df_ventas["Fecha"], y=df_ventas["Margen"],
+                                     name="Margen", marker_color="#059669"))
+                fig.update_layout(
+                    barmode="group", height=320,
+                    margin=dict(t=10, b=30, l=10, r=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="Inter"),
+                )
+                fig.update_xaxes(showgrid=False)
+                fig.update_yaxes(showgrid=True, gridcolor="#f3f4f6")
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("No hay datos de ventas disponibles. Sincronice con Obuma primero.")
+                st.info("Sin datos de ventas. Use la seccion Sincronizacion para cargar datos desde Obuma.")
 
         with col_right:
-            st.subheader("Ingresos vs Egresos")
+            st.markdown('<p class="section-header">Ingresos vs Egresos</p>', unsafe_allow_html=True)
             contab_data = db.query(
                 func.date(ContabilidadHistorico.fecha).label("fecha"),
                 func.sum(ContabilidadHistorico.haber).label("ingresos"),
@@ -133,62 +291,128 @@ if page == "Dashboard":
                 fig2 = go.Figure()
                 fig2.add_trace(go.Scatter(x=df_contab["Fecha"], y=df_contab["Ingresos"],
                                           mode="lines+markers", name="Ingresos",
-                                          line=dict(color="#4CAF50", width=2)))
+                                          line=dict(color="#059669", width=2.5),
+                                          marker=dict(size=6)))
                 fig2.add_trace(go.Scatter(x=df_contab["Fecha"], y=df_contab["Egresos"],
                                           mode="lines+markers", name="Egresos",
-                                          line=dict(color="#F44336", width=2)))
-                fig2.update_layout(height=350, margin=dict(t=20, b=20))
+                                          line=dict(color="#dc2626", width=2.5),
+                                          marker=dict(size=6)))
+                fig2.update_layout(
+                    height=320,
+                    margin=dict(t=10, b=30, l=10, r=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="Inter"),
+                )
+                fig2.update_xaxes(showgrid=False)
+                fig2.update_yaxes(showgrid=True, gridcolor="#f3f4f6")
                 st.plotly_chart(fig2, use_container_width=True)
             else:
-                st.info("No hay datos de contabilidad disponibles. Sincronice con Obuma primero.")
+                st.info("Sin datos de contabilidad. Sincronice con Obuma primero.")
 
         st.markdown("---")
-        st.subheader("Top Clientes por Ventas")
-        top_clientes = db.query(
-            ClienteFinal.nombre,
-            func.sum(VentaHistorico.total).label("total"),
-            func.count(VentaHistorico.id).label("transacciones")
-        ).join(
-            VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
-        ).group_by(
-            ClienteFinal.nombre
-        ).order_by(
-            func.sum(VentaHistorico.total).desc()
-        ).limit(10).all()
 
-        if top_clientes:
-            df_top = pd.DataFrame([
-                {"Cliente": c.nombre, "Total Ventas": c.total or 0, "Transacciones": c.transacciones}
-                for c in top_clientes
-            ])
-            st.dataframe(df_top, use_container_width=True, hide_index=True)
-        else:
-            st.info("No hay datos de clientes disponibles.")
+        col_tbl1, col_tbl2 = st.columns(2)
+
+        with col_tbl1:
+            st.markdown('<p class="section-header">Ultimas Transacciones</p>', unsafe_allow_html=True)
+            recent_ventas = db.query(VentaHistorico).order_by(VentaHistorico.fecha.desc()).limit(10).all()
+            if recent_ventas:
+                data = []
+                for v in recent_ventas:
+                    cliente_nombre = ""
+                    if v.cliente_id:
+                        cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
+                        cliente_nombre = cliente.nombre if cliente else ""
+                    estado = "Anulada" if v.anulada else "Vigente"
+                    data.append({
+                        "Fecha": str(v.fecha)[:10] if v.fecha else "-",
+                        "Tipo": v.tipo_documento or "-",
+                        "Folio": v.folio or "-",
+                        "Total": format_clp(v.total),
+                        "Estado": estado,
+                    })
+                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+            else:
+                st.info("Sin transacciones recientes.")
+
+        with col_tbl2:
+            st.markdown('<p class="section-header">Top Clientes</p>', unsafe_allow_html=True)
+            top_clientes = db.query(
+                ClienteFinal.nombre,
+                ClienteFinal.rut,
+                func.sum(VentaHistorico.total).label("total"),
+                func.count(VentaHistorico.id).label("transacciones")
+            ).join(
+                VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
+            ).group_by(
+                ClienteFinal.nombre, ClienteFinal.rut
+            ).order_by(
+                func.sum(VentaHistorico.total).desc()
+            ).limit(10).all()
+
+            if top_clientes:
+                df_top = pd.DataFrame([
+                    {"Cliente": c.nombre, "RUT": c.rut or "-",
+                     "Total": format_clp(c.total), "Docs": c.transacciones}
+                    for c in top_clientes
+                ])
+                st.dataframe(df_top, use_container_width=True, hide_index=True)
+            else:
+                clientes_list = db.query(ClienteFinal).filter(ClienteFinal.activo == True).all()
+                if clientes_list:
+                    df_cl = pd.DataFrame([
+                        {"Cliente": c.nombre, "RUT": c.rut or "-", "Email": c.email or "-"}
+                        for c in clientes_list
+                    ])
+                    st.dataframe(df_cl, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Sin datos de clientes.")
 
     finally:
         db.close()
 
 
 elif page == "Ventas":
-    st.markdown('<p class="main-header">Gestión de Ventas</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Gestion de Ventas</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Detalle de documentos de venta con filtros avanzados</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            fecha_desde = st.date_input("Fecha desde", value=date.today() - timedelta(days=30))
+            fecha_desde = st.date_input("Desde", value=date.today() - timedelta(days=90))
         with col2:
-            fecha_hasta = st.date_input("Fecha hasta", value=date.today())
+            fecha_hasta = st.date_input("Hasta", value=date.today())
+        with col3:
+            filtro_estado = st.selectbox("Estado", ["Todos", "Vigentes", "Anuladas"])
 
         query = db.query(VentaHistorico)
         if fecha_desde:
             query = query.filter(func.date(VentaHistorico.fecha) >= fecha_desde)
         if fecha_hasta:
             query = query.filter(func.date(VentaHistorico.fecha) <= fecha_hasta)
+        if filtro_estado == "Vigentes":
+            query = query.filter(VentaHistorico.anulada == False)
+        elif filtro_estado == "Anuladas":
+            query = query.filter(VentaHistorico.anulada == True)
 
         ventas = query.order_by(VentaHistorico.fecha.desc()).all()
 
         if ventas:
+            total_neto = sum(v.subtotal or 0 for v in ventas)
+            total_total = sum(v.total or 0 for v in ventas)
+            total_margen = sum(v.margen_neto or 0 for v in ventas)
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Documentos", len(ventas))
+            m2.metric("Total Neto", format_clp(total_neto))
+            m3.metric("Total Bruto", format_clp(total_total))
+            m4.metric("Margen", format_clp(total_margen))
+
+            st.markdown("---")
+
             data = []
             for v in ventas:
                 cliente_nombre = ""
@@ -196,33 +420,63 @@ elif page == "Ventas":
                     cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
                     cliente_nombre = cliente.nombre if cliente else ""
                 data.append({
-                    "Fecha": str(v.fecha)[:10] if v.fecha else "",
-                    "Cliente": cliente_nombre,
-                    "Folio": v.folio,
-                    "Tipo": v.tipo_documento,
-                    "Neto": v.subtotal or 0,
-                    "IVA": v.impuestos or 0,
-                    "Total": v.total or 0,
-                    "Costo": v.costo_total or 0,
-                    "Margen": v.margen_neto or 0,
+                    "Fecha": str(v.fecha)[:10] if v.fecha else "-",
+                    "Tipo": v.tipo_documento or "-",
+                    "Folio": v.folio or "-",
+                    "Cliente": cliente_nombre or "-",
+                    "Neto": format_clp(v.subtotal),
+                    "IVA": format_clp(v.impuestos),
+                    "Total": format_clp(v.total),
+                    "Costo": format_clp(v.costo_total),
+                    "Margen": format_clp(v.margen_neto),
+                    "Estado": "Anulada" if v.anulada else "Vigente",
+                    "Obs.": (v.observacion or "")[:50],
                 })
 
             df = pd.DataFrame(data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            st.markdown("---")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Neto", f"${df['Neto'].sum():,.0f}")
-            col2.metric("Total", f"${df['Total'].sum():,.0f}")
-            col3.metric("Margen Total", f"${df['Margen'].sum():,.0f}")
+            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
         else:
-            st.info("No hay ventas en el rango seleccionado.")
+            st.info("No hay ventas en el rango seleccionado. Pruebe ampliando las fechas o sincronice datos desde Obuma.")
+    finally:
+        db.close()
+
+
+elif page == "Clientes":
+    st.markdown('<p class="main-title">Gestion de Clientes</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Clientes registrados desde Obuma ERP</p>', unsafe_allow_html=True)
+
+    db = get_db()
+    try:
+        clientes = db.query(ClienteFinal).filter(ClienteFinal.activo == True).all()
+
+        if clientes:
+            st.metric("Total Clientes", len(clientes))
+            st.markdown("---")
+
+            data = []
+            for c in clientes:
+                n_ventas = db.query(VentaHistorico).filter(VentaHistorico.cliente_id == c.id).count()
+                total = db.query(func.sum(VentaHistorico.total)).filter(VentaHistorico.cliente_id == c.id).scalar() or 0
+                data.append({
+                    "Nombre": c.nombre,
+                    "RUT": c.rut or "-",
+                    "Email": c.email or "-",
+                    "Telefono": c.telefono or "-",
+                    "Direccion": (c.direccion or "-")[:40],
+                    "Ventas": n_ventas,
+                    "Total Facturado": format_clp(total),
+                })
+
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay clientes registrados. Sincronice con Obuma para cargar los clientes.")
     finally:
         db.close()
 
 
 elif page == "Contabilidad":
-    st.markdown('<p class="main-header">Contabilidad</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Contabilidad</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Registros contables del libro diario</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
@@ -230,9 +484,9 @@ elif page == "Contabilidad":
         total_haber = db.query(func.sum(ContabilidadHistorico.haber)).scalar() or 0
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Ingresos (Haber)", f"${total_haber:,.0f}")
-        col2.metric("Total Egresos (Debe)", f"${total_debe:,.0f}")
-        col3.metric("Diferencia", f"${total_haber - total_debe:,.0f}")
+        col1.metric("Total Ingresos (Haber)", format_clp(total_haber))
+        col2.metric("Total Egresos (Debe)", format_clp(total_debe))
+        col3.metric("Balance", format_clp(total_haber - total_debe))
 
         st.markdown("---")
 
@@ -242,13 +496,13 @@ elif page == "Contabilidad":
 
         if entries:
             df = pd.DataFrame([{
-                "Fecha": str(e.fecha) if e.fecha else "",
-                "Cuenta": e.cuenta,
-                "Descripción": e.descripcion,
-                "Debe": e.debe or 0,
-                "Haber": e.haber or 0,
+                "Fecha": str(e.fecha) if e.fecha else "-",
+                "Cuenta": e.cuenta or "-",
+                "Descripcion": (e.descripcion or "-")[:60],
+                "Debe": format_clp(e.debe),
+                "Haber": format_clp(e.haber),
             } for e in entries])
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
         else:
             st.info("No hay registros de contabilidad. Sincronice con Obuma primero.")
     finally:
@@ -256,39 +510,40 @@ elif page == "Contabilidad":
 
 
 elif page == "Reportes":
-    st.markdown('<p class="main-header">Gestión de Reportes Excel</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Reportes Excel</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Generacion y descarga de reportes profesionales</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
-        st.subheader("Generar Nuevo Reporte")
-        col1, col2 = st.columns([2, 1])
+        st.markdown('<p class="section-header">Generar Nuevo Reporte</p>', unsafe_allow_html=True)
+        col1, col2 = st.columns([3, 1])
         with col1:
             fecha_reporte = st.date_input("Fecha del reporte", value=date.today())
         with col2:
             st.write("")
             st.write("")
-            if st.button("Generar Reporte Diario", type="primary"):
-                with st.spinner("Generando reporte..."):
+            if st.button("Generar Reporte", type="primary", use_container_width=True):
+                with st.spinner("Generando reporte Excel..."):
                     filepath = generate_daily_report(db, fecha_reporte)
-                    st.success(f"Reporte generado exitosamente")
-
+                    st.success("Reporte generado exitosamente")
                     with open(filepath, "rb") as f:
                         st.download_button(
                             label="Descargar Reporte",
                             data=f.read(),
                             file_name=os.path.basename(filepath),
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
                         )
 
         st.markdown("---")
-        st.subheader("Reportes Históricos")
+        st.markdown('<p class="section-header">Reportes Historicos</p>', unsafe_allow_html=True)
 
         reportes = db.query(ReporteGenerado).order_by(ReporteGenerado.generado_at.desc()).all()
         if reportes:
             for r in reportes:
-                col1, col2, col3 = st.columns([3, 2, 1])
+                col1, col2, col3 = st.columns([4, 3, 1])
                 col1.write(f"**{r.nombre_archivo}**")
-                col2.write(f"Generado: {str(r.generado_at)[:16]}")
+                col2.write(f"{str(r.generado_at)[:16]}")
                 if r.ruta_archivo and os.path.exists(r.ruta_archivo):
                     with open(r.ruta_archivo, "rb") as f:
                         col3.download_button(
@@ -296,101 +551,133 @@ elif page == "Reportes":
                             data=f.read(),
                             file_name=r.nombre_archivo,
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"download_{r.id}"
+                            key=f"dl_{r.id}"
                         )
                 else:
-                    col3.write("Archivo no disponible")
+                    col3.write("N/A")
         else:
-            st.info("No hay reportes generados aún.")
+            st.info("No se han generado reportes aun. Use el boton de arriba para crear uno.")
     finally:
         db.close()
 
 
-elif page == "Sincronización":
-    st.markdown('<p class="main-header">Sincronización con Obuma</p>', unsafe_allow_html=True)
-
-    import asyncio
+elif page == "Sincronizacion":
+    st.markdown('<p class="main-title">Sincronizacion con Obuma</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Importe datos desde el ERP Obuma a la base de datos local</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Sincronizar Todo", type="primary"):
-                with st.spinner("Sincronizando todos los datos desde Obuma..."):
+            if st.button("Sincronizar Todo", type="primary", use_container_width=True):
+                with st.spinner("Conectando con Obuma y sincronizando todos los modulos..."):
                     service = SyncService(db)
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    results = loop.run_until_complete(service.sync_all())
-                    loop.close()
-                    st.success("Sincronización completada")
-                    st.json(results)
+                    results = run_async(service.sync_all())
+                    st.success("Sincronizacion completada exitosamente")
+
+                    for module, result in results.items():
+                        if isinstance(result, dict) and "error" not in result:
+                            st.markdown(f"""
+                            <div style="background:#f0fdf4; border-left:4px solid #059669; padding:0.8rem 1rem; border-radius:0 8px 8px 0; margin:0.3rem 0;">
+                                <strong>{module.title()}</strong>: {result.get('synced', 0)} registros sincronizados
+                                (API: {result.get('total_api', 0)} | BD: {result.get('total_db', 0)})
+                            </div>
+                            """, unsafe_allow_html=True)
+                        elif isinstance(result, dict) and "error" in result:
+                            st.markdown(f"""
+                            <div style="background:#fef2f2; border-left:4px solid #dc2626; padding:0.8rem 1rem; border-radius:0 8px 8px 0; margin:0.3rem 0;">
+                                <strong>{module.title()}</strong>: Error - {str(result.get('error', ''))[:100]}
+                            </div>
+                            """, unsafe_allow_html=True)
 
         with col2:
-            endpoint = st.selectbox("Sincronizar módulo específico",
-                                     ["ventas", "productos", "compras", "contabilidad"])
-            if st.button("Sincronizar Módulo"):
+            endpoint = st.selectbox("Modulo especifico", ["clientes", "ventas", "productos", "compras", "contabilidad"])
+            if st.button("Sincronizar Modulo", use_container_width=True):
                 with st.spinner(f"Sincronizando {endpoint}..."):
                     service = SyncService(db)
                     method_map = {
+                        "clientes": service.sync_clientes,
                         "ventas": service.sync_ventas,
                         "productos": service.sync_productos,
                         "compras": service.sync_compras,
                         "contabilidad": service.sync_contabilidad,
                     }
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    result = loop.run_until_complete(method_map[endpoint]())
-                    loop.close()
-                    st.success(f"{endpoint} sincronizado")
+                    result = run_async(method_map[endpoint]())
+                    if isinstance(result, dict) and "error" not in result:
+                        st.success(f"{endpoint.title()} sincronizado: {result.get('synced', 0)} registros")
+                    else:
+                        st.warning(f"Sin datos nuevos para {endpoint}")
                     st.json(result)
 
         st.markdown("---")
-        st.subheader("Historial de Sincronización")
+        st.markdown('<p class="section-header">Historial de Sincronizacion</p>', unsafe_allow_html=True)
 
         logs = db.query(SyncLog).order_by(SyncLog.ejecutado_at.desc()).limit(20).all()
         if logs:
-            df = pd.DataFrame([{
-                "Fecha": str(l.ejecutado_at)[:16],
-                "Endpoint": l.endpoint,
-                "Registros API": l.registros_api,
-                "Registros DB": l.registros_db,
-                "Discrepancias": l.discrepancias,
-                "Estado": l.estado,
-            } for l in logs])
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            data = []
+            for l in logs:
+                estado_badge = "badge-ok" if l.estado == "ok" else "badge-error"
+                data.append({
+                    "Fecha": str(l.ejecutado_at)[:16],
+                    "Modulo": l.endpoint,
+                    "Registros API": l.registros_api,
+                    "Registros BD": l.registros_db,
+                    "Estado": l.estado.upper(),
+                })
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
         else:
-            st.info("No hay registros de sincronización.")
+            st.info("Sin historial de sincronizacion. Presione 'Sincronizar Todo' para comenzar.")
     finally:
         db.close()
 
 
-elif page == "Auditoría":
-    st.markdown('<p class="main-header">Auditoría de Cifras</p>', unsafe_allow_html=True)
+elif page == "Auditoria":
+    st.markdown('<p class="main-title">Auditoria de Cifras</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Comparacion de datos entre la API de Obuma y la base de datos local</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
         service = SyncService(db)
         audit = service.audit_totals()
 
-        st.subheader("Comparación API vs Base de Datos")
-
         col1, col2 = st.columns(2)
+
         with col1:
-            st.markdown("### Ventas")
-            st.metric("Total en BD", f"${audit['ventas']['total_db']:,.0f}")
-            st.metric("Registros en BD", audit['ventas']['registros_db'])
-            st.metric("Última Sync - Total API", f"${audit['ventas']['ultima_sync_api_total']:,.0f}")
-            st.metric("Última Sync - Registros API", audit['ventas']['ultima_sync_api_registros'])
-            discrepancia = audit['ventas']['discrepancia_total']
+            st.markdown('<p class="section-header">Ventas</p>', unsafe_allow_html=True)
+
+            v = audit["ventas"]
+            st.metric("Total en Base de Datos", format_clp(v["total_db"]))
+            st.metric("Registros en BD", v["registros_db"])
+            st.metric("Ultima Sync - Total API", format_clp(v["ultima_sync_api_total"]))
+            st.metric("Ultima Sync - Registros API", v["ultima_sync_api_registros"])
+
+            discrepancia = v["discrepancia_total"]
             if discrepancia > 0:
-                st.error(f"Discrepancia detectada: ${discrepancia:,.0f}")
+                st.error(f"Discrepancia detectada: {format_clp(discrepancia)}")
             else:
-                st.success("Sin discrepancias en totales de ventas")
+                st.success("Sin discrepancias en ventas")
 
         with col2:
-            st.markdown("### Compras")
-            st.metric("Total en BD", f"${audit['compras']['total_db']:,.0f}")
-            st.metric("Registros en BD", audit['compras']['registros_db'])
-            st.metric("Última Sync - Registros API", audit['compras']['ultima_sync_api_registros'])
+            st.markdown('<p class="section-header">Compras</p>', unsafe_allow_html=True)
+
+            c = audit["compras"]
+            st.metric("Total en Base de Datos", format_clp(c["total_db"]))
+            st.metric("Registros en BD", c["registros_db"])
+            st.metric("Ultima Sync - Registros API", c["ultima_sync_api_registros"])
+
+        st.markdown("---")
+        st.markdown('<p class="section-header">Log de Auditorias</p>', unsafe_allow_html=True)
+
+        logs = db.query(SyncLog).order_by(SyncLog.ejecutado_at.desc()).limit(10).all()
+        if logs:
+            data = [{
+                "Fecha": str(l.ejecutado_at)[:16],
+                "Modulo": l.endpoint,
+                "Total API": format_clp(l.total_api),
+                "Total BD": format_clp(l.total_db),
+                "Discrepancias": l.discrepancias,
+                "Estado": l.estado.upper(),
+            } for l in logs]
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
     finally:
         db.close()

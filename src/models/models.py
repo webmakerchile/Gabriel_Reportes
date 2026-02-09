@@ -88,6 +88,10 @@ class VentaHistorico(Base):
     detalle = Column(Text, nullable=True)
     costo_total = Column(Float, default=0)
     margen_neto = Column(Float, default=0)
+    total_pagado = Column(Float, default=0)
+    total_por_pagar = Column(Float, default=0)
+    anulada = Column(Boolean, default=False)
+    observacion = Column(Text, nullable=True)
     sincronizado_at = Column(DateTime, server_default=func.now())
 
     tenant = relationship("Tenant", back_populates="ventas")

@@ -18,7 +18,7 @@ class ObumaClient:
                 response.raise_for_status()
                 result = response.json()
                 if result is None:
-                    return {"data": [], "message": "API returned null"}
+                    return {"data": [], "data-total-items": 0}
                 return result
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error {e.response.status_code} on {endpoint}: {e}")
@@ -41,6 +41,9 @@ class ObumaClient:
         if fecha_desde:
             params["fecha_desde"] = fecha_desde
         return await self._get("contabilidad.listDiario.json", params)
+
+    async def get_clientes(self, params: dict = None) -> dict:
+        return await self._get("clientes.list.json", params)
 
     async def get_categorias_productos(self) -> dict:
         return await self._get("productosCategorias.list.json")

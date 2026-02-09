@@ -10,6 +10,21 @@ from src.models.models import (
 
 logger = logging.getLogger(__name__)
 
+TIPO_DCTO_MAP = {
+    "33": "Factura Electr.",
+    "34": "Factura Exenta",
+    "39": "Boleta Electr.",
+    "41": "Boleta Exenta",
+    "43": "Liquidacion Fact.",
+    "46": "Factura Compra",
+    "52": "Guia Despacho",
+    "56": "Nota Debito",
+    "61": "Nota Credito",
+    "110": "Factura Export.",
+    "111": "Nota Debito Exp.",
+    "112": "Nota Credito Exp.",
+}
+
 
 class SyncService:
     def __init__(self, db: Session, tenant_id: int = None):
@@ -26,8 +41,44 @@ class SyncService:
             self.db.refresh(tenant)
         return tenant.id
 
+    def _extract_items(self, data, *keys):
+        if data is None:
+            return []
+        if isinstance(data, list):
+            return data
+        result = data.get("data")
+        if result is not None and isinstance(result, list):
+            return result
+        for key in keys:
+            val = data.get(key)
+            if val is not None and isinstance(val, list):
+                return val
+        return []
+
+    def _safe_float(self, val):
+        try:
+            return float(val or 0)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _safe_int(self, val):
+        try:
+            return int(float(val or 0))
+        except (ValueError, TypeError):
+            return 0
+
+    def _parse_date(self, date_str):
+        if not date_str or date_str in ("0000-00-00", "0000-00-00 00:00:00"):
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(str(date_str).strip()[:19], fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
+
     def _get_or_create_cliente(self, rut: str = None, nombre: str = "Sin nombre") -> int:
-        if not rut:
+        if not rut or rut == "0":
             return None
         cliente = self.db.query(ClienteFinal).filter(
             ClienteFinal.rut == rut,
@@ -39,16 +90,50 @@ class SyncService:
             self.db.flush()
         return cliente.id
 
-    def _extract_items(self, data, *keys):
-        if data is None:
-            return []
-        if isinstance(data, list):
+    async def sync_clientes(self) -> dict:
+        data = await self.client.get_clientes()
+        if isinstance(data, dict) and "error" in data:
+            self._log_sync("clientes", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
-        for key in keys:
-            val = data.get(key)
-            if val is not None:
-                return val if isinstance(val, list) else []
-        return []
+
+        items = self._extract_items(data, "clientes")
+        count = 0
+        for item in items:
+            rut = item.get("cliente_rut", "")
+            if not rut or rut == "0":
+                continue
+
+            existing = self.db.query(ClienteFinal).filter(
+                ClienteFinal.rut == rut,
+                ClienteFinal.tenant_id == self.tenant_id
+            ).first()
+
+            nombre = item.get("cliente_razon_social", item.get("cliente_nombre_fantasia", ""))
+            email = item.get("cliente_email", "")
+            telefono = item.get("cliente_telefono", item.get("cliente_celular", ""))
+            direccion = item.get("cliente_direccion_facturacion", "")
+
+            if existing:
+                existing.nombre = nombre or existing.nombre
+                existing.email = email or existing.email
+                existing.telefono = telefono or existing.telefono
+                existing.direccion = direccion or existing.direccion
+            else:
+                cliente = ClienteFinal(
+                    tenant_id=self.tenant_id,
+                    rut=rut,
+                    nombre=nombre or "Sin nombre",
+                    email=email,
+                    telefono=telefono,
+                    direccion=direccion,
+                )
+                self.db.add(cliente)
+            count += 1
+
+        self.db.commit()
+        db_count = self.db.query(ClienteFinal).filter(ClienteFinal.tenant_id == self.tenant_id).count()
+        self._log_sync("clientes", len(items), db_count, 0)
+        return {"synced": count, "total_api": len(items), "total_db": db_count}
 
     async def sync_productos(self) -> dict:
         data = await self.client.get_productos()
@@ -56,33 +141,38 @@ class SyncService:
             self._log_sync("productos", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = self._extract_items(data, "data", "productos")
+        items = self._extract_items(data, "productos")
         count = 0
         for item in items:
-            obuma_id = str(item.get("id", ""))
+            obuma_id = str(item.get("producto_id", item.get("id", "")))
             existing = self.db.query(Producto).filter(
                 Producto.obuma_id == obuma_id,
                 Producto.tenant_id == self.tenant_id
             ).first()
 
-            costo = float(item.get("costo", 0) or 0)
+            nombre = item.get("producto_nombre", item.get("nombre", ""))
+            sku = item.get("producto_sku", item.get("sku", ""))
+            categoria = item.get("producto_categoria", item.get("categoria", ""))
+            precio_venta = self._safe_float(item.get("producto_precio_venta", item.get("precio_venta", 0)))
+            costo = self._safe_float(item.get("producto_costo", item.get("costo", 0)))
+            stock = self._safe_int(item.get("producto_stock", item.get("stock", 0)))
 
             if existing:
                 old_costo = existing.costo
-                existing.nombre = item.get("nombre", existing.nombre)
-                existing.sku = item.get("sku", existing.sku)
-                existing.categoria = item.get("categoria", existing.categoria)
-                existing.precio_venta = float(item.get("precio_venta", 0) or 0)
+                existing.nombre = nombre or existing.nombre
+                existing.sku = sku or existing.sku
+                existing.categoria = categoria or existing.categoria
+                existing.precio_venta = precio_venta
                 existing.costo = costo
-                existing.stock_actual = int(item.get("stock", 0) or 0)
+                existing.stock_actual = stock
 
                 if costo and costo != old_costo:
                     costo_hist = CostoHistorico(
                         tenant_id=self.tenant_id,
                         producto_id=existing.id,
                         costo_unitario=costo,
-                        cantidad=int(item.get("stock", 0) or 0),
-                        costo_total=costo * int(item.get("stock", 0) or 0),
+                        cantidad=stock,
+                        costo_total=costo * stock,
                         fecha=datetime.now(),
                         fuente="obuma",
                     )
@@ -91,12 +181,12 @@ class SyncService:
                 producto = Producto(
                     tenant_id=self.tenant_id,
                     obuma_id=obuma_id,
-                    nombre=item.get("nombre", ""),
-                    sku=item.get("sku", ""),
-                    categoria=item.get("categoria", ""),
-                    precio_venta=float(item.get("precio_venta", 0) or 0),
+                    nombre=nombre or "Sin nombre",
+                    sku=sku,
+                    categoria=categoria,
+                    precio_venta=precio_venta,
                     costo=costo,
-                    stock_actual=int(item.get("stock", 0) or 0),
+                    stock_actual=stock,
                 )
                 self.db.add(producto)
                 self.db.flush()
@@ -106,8 +196,8 @@ class SyncService:
                         tenant_id=self.tenant_id,
                         producto_id=producto.id,
                         costo_unitario=costo,
-                        cantidad=int(item.get("stock", 0) or 0),
-                        costo_total=costo * int(item.get("stock", 0) or 0),
+                        cantidad=stock,
+                        costo_total=costo * stock,
                         fecha=datetime.now(),
                         fuente="obuma",
                     )
@@ -125,65 +215,83 @@ class SyncService:
             self._log_sync("ventas", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = self._extract_items(data, "data", "ventas")
+        items = self._extract_items(data, "ventas")
         count = 0
         total_api = 0.0
         for item in items:
-            obuma_id = str(item.get("id", ""))
-            total = float(item.get("total", 0) or 0)
-            total_api += total
-
+            obuma_id = str(item.get("venta_id", item.get("id", "")))
+            
             existing = self.db.query(VentaHistorico).filter(VentaHistorico.obuma_id == obuma_id).first()
             if existing:
+                neto = self._safe_float(item.get("venta_neto", 0))
+                iva = self._safe_float(item.get("venta_iva", 0))
+                total = self._safe_float(item.get("venta_total", 0))
+                costo = self._safe_float(item.get("venta_costo", 0))
+                utilidad = self._safe_float(item.get("venta_utilidad", 0))
+                total_api += total
+
+                existing.subtotal = neto
+                existing.impuestos = iva
+                existing.total = total
+                existing.costo_total = costo
+                existing.margen_neto = utilidad if utilidad else (neto - costo)
+                existing.total_pagado = self._safe_float(item.get("venta_total_pagado", 0))
+                existing.total_por_pagar = self._safe_float(item.get("venta_total_por_pagar", 0))
+                existing.anulada = str(item.get("venta_anulada", "0")) == "1"
+                existing.detalle = json.dumps(item, default=str, ensure_ascii=False)
+                count += 1
                 continue
 
+            fecha = self._parse_date(item.get("venta_fecha_ingreso", item.get("fecha", None)))
+            tipo_dcto_code = str(item.get("venta_tipo_dcto", item.get("tipo_documento", "")))
+            tipo_dcto = TIPO_DCTO_MAP.get(tipo_dcto_code, f"Tipo {tipo_dcto_code}")
+
+            neto = self._safe_float(item.get("venta_neto", item.get("neto", 0)))
+            iva = self._safe_float(item.get("venta_iva", item.get("iva", 0)))
+            total = self._safe_float(item.get("venta_total", item.get("total", 0)))
+            costo = self._safe_float(item.get("venta_costo", item.get("costo_total", 0)))
+            utilidad = self._safe_float(item.get("venta_utilidad", 0))
+            total_api += total
+
+            cliente_id_obuma = item.get("rel_cliente_id", item.get("cliente_id", "0"))
             cliente_rut = item.get("cliente_rut", item.get("rut", None))
-            cliente_nombre = item.get("cliente_nombre", item.get("razon_social", "Sin nombre"))
+            cliente_nombre = item.get("cliente_razon_social", item.get("cliente_nombre", ""))
             cliente_id = self._get_or_create_cliente(cliente_rut, cliente_nombre)
 
-            fecha_str = item.get("fecha", None)
-            fecha = None
-            if fecha_str:
-                try:
-                    fecha = datetime.strptime(str(fecha_str)[:10], "%Y-%m-%d")
-                except (ValueError, TypeError):
-                    try:
-                        fecha = datetime.strptime(str(fecha_str)[:10], "%d-%m-%Y")
-                    except (ValueError, TypeError):
-                        fecha = None
-
-            subtotal = float(item.get("subtotal", item.get("neto", 0)) or 0)
-            impuestos = float(item.get("impuestos", item.get("iva", 0)) or 0)
-            costo_total = float(item.get("costo_total", 0) or 0)
+            folio = str(item.get("venta_nro_dcto", item.get("folio", "")))
+            anulada = str(item.get("venta_anulada", "0")) == "1"
+            estado = "Anulada" if anulada else item.get("venta_estado", "Vigente")
 
             venta = VentaHistorico(
                 tenant_id=self.tenant_id,
                 obuma_id=obuma_id,
                 cliente_id=cliente_id,
                 fecha=fecha,
-                tipo_documento=item.get("tipo_documento", item.get("tipoDte", "")),
-                folio=str(item.get("folio", "")),
-                subtotal=subtotal,
-                impuestos=impuestos,
+                tipo_documento=tipo_dcto,
+                folio=folio,
+                subtotal=neto,
+                impuestos=iva,
                 total=total,
-                estado=item.get("estado", ""),
+                estado=estado,
                 detalle=json.dumps(item, default=str, ensure_ascii=False),
-                costo_total=costo_total,
-                margen_neto=subtotal - costo_total if costo_total else 0,
+                costo_total=costo,
+                margen_neto=utilidad if utilidad else (neto - costo),
+                total_pagado=self._safe_float(item.get("venta_total_pagado", 0)),
+                total_por_pagar=self._safe_float(item.get("venta_total_por_pagar", 0)),
+                anulada=anulada,
+                observacion=item.get("venta_observacion", ""),
             )
             self.db.add(venta)
             count += 1
 
         self.db.commit()
         db_count = self.db.query(VentaHistorico).count()
-        total_db = self.db.query(VentaHistorico).with_entities(
-            VentaHistorico.total
-        ).all()
-        total_db_sum = sum(v[0] for v in total_db if v[0])
+        total_db_sum = self.db.query(VentaHistorico).with_entities(VentaHistorico.total).all()
+        total_db_val = sum(v[0] for v in total_db_sum if v[0])
 
         self._log_sync("ventas", len(items), db_count,
                         abs(len(items) - count),
-                        total_api=total_api, total_db=total_db_sum)
+                        total_api=total_api, total_db=total_db_val)
         return {"synced": count, "total_api": len(items), "total_db": db_count}
 
     async def sync_compras(self) -> dict:
@@ -192,33 +300,24 @@ class SyncService:
             self._log_sync("compras", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = self._extract_items(data, "data", "compras")
+        items = self._extract_items(data, "compras")
         count = 0
         for item in items:
-            obuma_id = str(item.get("id", item.get("folio_dcto", "")))
+            obuma_id = str(item.get("compra_id", item.get("id", item.get("folio_dcto", ""))))
             existing = self.db.query(CompraHistorico).filter(CompraHistorico.obuma_id == obuma_id).first()
             if existing:
                 continue
 
-            fecha_str = item.get("fecha", None)
-            fecha = None
-            if fecha_str:
-                try:
-                    fecha = datetime.strptime(str(fecha_str)[:10], "%Y-%m-%d")
-                except (ValueError, TypeError):
-                    try:
-                        fecha = datetime.strptime(str(fecha_str)[:10], "%d-%m-%Y")
-                    except (ValueError, TypeError):
-                        fecha = None
+            fecha = self._parse_date(item.get("compra_fecha", item.get("fecha", None)))
 
             compra = CompraHistorico(
                 tenant_id=self.tenant_id,
                 obuma_id=obuma_id,
                 fecha=fecha,
-                proveedor=item.get("proveedor", ""),
-                folio=str(item.get("folio_dcto", "")),
-                total=float(item.get("total", 0) or 0),
-                estado=item.get("estado", ""),
+                proveedor=item.get("proveedor", item.get("compra_proveedor", "")),
+                folio=str(item.get("folio_dcto", item.get("compra_folio", ""))),
+                total=self._safe_float(item.get("total", item.get("compra_total", 0))),
+                estado=item.get("estado", item.get("compra_estado", "")),
                 detalle=json.dumps(item, default=str, ensure_ascii=False),
             )
             self.db.add(compra)
@@ -235,28 +334,19 @@ class SyncService:
             self._log_sync("contabilidad", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
 
-        items = self._extract_items(data, "data", "asientos")
+        items = self._extract_items(data, "asientos")
         count = 0
         for item in items:
-            fecha_str = item.get("fecha", None)
-            fecha = None
-            if fecha_str:
-                try:
-                    fecha = datetime.strptime(str(fecha_str)[:10], "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    try:
-                        fecha = datetime.strptime(str(fecha_str)[:10], "%d-%m-%Y").date()
-                    except (ValueError, TypeError):
-                        fecha = None
+            fecha = self._parse_date(item.get("fecha", item.get("contabilidad_fecha", None)))
 
             entry = ContabilidadHistorico(
                 tenant_id=self.tenant_id,
-                fecha=fecha,
-                cuenta=item.get("cuenta", item.get("codigo_cuenta", "")),
-                descripcion=item.get("descripcion", item.get("glosa", "")),
-                debe=float(item.get("debe", 0) or 0),
-                haber=float(item.get("haber", 0) or 0),
-                tipo=item.get("tipo", ""),
+                fecha=fecha.date() if fecha else None,
+                cuenta=item.get("cuenta", item.get("contabilidad_cuenta", item.get("codigo_cuenta", ""))),
+                descripcion=item.get("descripcion", item.get("contabilidad_glosa", item.get("glosa", ""))),
+                debe=self._safe_float(item.get("debe", item.get("contabilidad_debe", 0))),
+                haber=self._safe_float(item.get("haber", item.get("contabilidad_haber", 0))),
+                tipo=item.get("tipo", item.get("contabilidad_tipo", "")),
             )
             self.db.add(entry)
             count += 1
@@ -268,6 +358,7 @@ class SyncService:
 
     async def sync_all(self) -> dict:
         results = {}
+        results["clientes"] = await self.sync_clientes()
         results["productos"] = await self.sync_productos()
         results["ventas"] = await self.sync_ventas()
         results["compras"] = await self.sync_compras()
@@ -277,6 +368,7 @@ class SyncService:
     def _log_sync(self, endpoint, registros_api, registros_db, discrepancias,
                   total_api=0, total_db=0, estado="ok", detalle=None):
         log = SyncLog(
+            tenant_id=self.tenant_id,
             endpoint=endpoint,
             registros_api=registros_api,
             registros_db=registros_db,

@@ -41,6 +41,7 @@ async def sync_all(db: Session = Depends(get_db)):
 async def sync_endpoint(endpoint: str, db: Session = Depends(get_db)):
     service = SyncService(db)
     method_map = {
+        "clientes": service.sync_clientes,
         "ventas": service.sync_ventas,
         "productos": service.sync_productos,
         "compras": service.sync_compras,
