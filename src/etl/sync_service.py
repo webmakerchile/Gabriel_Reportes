@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from src.etl.obuma_client import ObumaClient
 from src.models.models import (
     VentaHistorico, CompraHistorico, Producto, ContabilidadHistorico,
-    CostoHistorico, ClienteFinal, SyncLog, Tenant
+    CostoHistorico, ClienteFinal, SyncLog, Tenant, ObumaApiEndpoint
 )
 
 logger = logging.getLogger(__name__)
@@ -380,6 +380,24 @@ class SyncService:
         )
         self.db.add(log)
         self.db.commit()
+
+        endpoint_map = {
+            "clientes": "API : Clientes",
+            "productos": "API : Productos",
+            "ventas": "API : Ventas",
+            "compras": "API : Compras",
+            "contabilidad": "API : Contabilidad",
+        }
+        api_name = endpoint_map.get(endpoint)
+        if api_name:
+            catalog_entry = self.db.query(ObumaApiEndpoint).filter(
+                ObumaApiEndpoint.nombre == api_name
+            ).first()
+            if catalog_entry:
+                catalog_entry.ultima_sync = datetime.now()
+                catalog_entry.registros_sync = registros_db
+                catalog_entry.estado = "sincronizado" if estado == "ok" else "error"
+                self.db.commit()
 
     def audit_totals(self) -> dict:
         results = {}

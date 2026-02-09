@@ -176,3 +176,25 @@ class ReporteGenerado(Base):
     archivo_datos = Column(Text, nullable=True)
     ruta_archivo = Column(String(500), nullable=True)
     generado_at = Column(DateTime, server_default=func.now())
+
+
+class ObumaApiEndpoint(Base):
+    __tablename__ = "obuma_api_endpoints"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    categoria = Column(String(100), nullable=False)
+    categoria_orden = Column(Integer, default=0)
+    nombre = Column(String(255), nullable=False)
+    endpoint_url = Column(String(500), nullable=True)
+    metodo_http = Column(String(10), default="GET")
+    descripcion = Column(Text, nullable=True)
+    parametros = Column(Text, nullable=True)
+    doc_url = Column(String(500), nullable=True)
+    implementado = Column(Boolean, default=False)
+    sync_habilitado = Column(Boolean, default=False)
+    ultima_sync = Column(DateTime, nullable=True)
+    registros_sync = Column(Integer, default=0)
+    estado = Column(String(50), default="disponible")
+    notas = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

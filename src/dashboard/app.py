@@ -13,9 +13,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from src.database import SessionLocal, engine, Base
 from src.models.models import (
     VentaHistorico, CompraHistorico, Producto, ContabilidadHistorico,
-    ClienteFinal, SyncLog, ReporteGenerado
+    ClienteFinal, SyncLog, ReporteGenerado, ObumaApiEndpoint
 )
 from src.etl.sync_service import SyncService
+from src.etl.obuma_client import ObumaClient
 from src.reports.excel_generator import generate_daily_report
 
 Base.metadata.create_all(bind=engine)
@@ -178,7 +179,7 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navegacion",
-    ["Dashboard", "Ventas", "Clientes", "Contabilidad", "Reportes", "Sincronizacion", "Auditoria"],
+    ["Dashboard", "Ventas", "Clientes", "Contabilidad", "API Obuma", "Reportes", "Sincronizacion", "Auditoria"],
     index=0,
     label_visibility="collapsed"
 )
@@ -505,6 +506,100 @@ elif page == "Contabilidad":
             st.dataframe(df, use_container_width=True, hide_index=True, height=400)
         else:
             st.info("No hay registros de contabilidad. Sincronice con Obuma primero.")
+    finally:
+        db.close()
+
+
+elif page == "API Obuma":
+    st.markdown('<p class="main-title">Catalogo API Obuma</p>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">Registro completo de endpoints de la API de Obuma ERP para automatizaciones</p>', unsafe_allow_html=True)
+
+    db = get_db()
+    try:
+        endpoints = db.query(ObumaApiEndpoint).order_by(
+            ObumaApiEndpoint.categoria_orden,
+            ObumaApiEndpoint.id
+        ).all()
+
+        total_eps = len(endpoints)
+        implementados = sum(1 for e in endpoints if e.implementado)
+        sync_activos = sum(1 for e in endpoints if e.sync_habilitado)
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Endpoints", total_eps)
+        m2.metric("Implementados", implementados)
+        m3.metric("Sync Activos", sync_activos)
+
+        st.markdown("---")
+
+        categorias_vistas = []
+        for ep in endpoints:
+            if ep.categoria not in categorias_vistas:
+                categorias_vistas.append(ep.categoria)
+                st.markdown(f'<p class="section-header">{ep.categoria_orden}.- {ep.categoria}</p>', unsafe_allow_html=True)
+
+            col_status = ""
+            if ep.implementado and ep.sync_habilitado:
+                col_status = '<span style="background:#d1fae5;color:#065f46;padding:2px 10px;border-radius:12px;font-size:0.75rem;font-weight:600;">SYNC ACTIVO</span>'
+            elif ep.implementado:
+                col_status = '<span style="background:#dbeafe;color:#1e40af;padding:2px 10px;border-radius:12px;font-size:0.75rem;font-weight:600;">IMPLEMENTADO</span>'
+            elif ep.endpoint_url:
+                col_status = '<span style="background:#fef3c7;color:#92400e;padding:2px 10px;border-radius:12px;font-size:0.75rem;font-weight:600;">DISPONIBLE</span>'
+            else:
+                col_status = '<span style="background:#f3f4f6;color:#6b7280;padding:2px 10px;border-radius:12px;font-size:0.75rem;font-weight:600;">REFERENCIA</span>'
+
+            metodo_color = {"GET": "#059669", "POST": "#d97706", "-": "#9ca3af"}.get(ep.metodo_http, "#6b7280")
+
+            sync_info = ""
+            if ep.sync_habilitado and ep.registros_sync > 0:
+                sync_info = f' | <strong>{ep.registros_sync}</strong> registros sincronizados'
+            if ep.ultima_sync:
+                sync_info += f' | Ultima sync: {str(ep.ultima_sync)[:16]}'
+
+            endpoint_display = f'<code style="background:#f1f5f9;padding:2px 8px;border-radius:4px;font-size:0.8rem;">{ep.endpoint_url}</code>' if ep.endpoint_url else '<span style="color:#9ca3af;font-size:0.8rem;">Sin endpoint directo</span>'
+
+            doc_link = f'<a href="{ep.doc_url}" target="_blank" style="color:#2563eb;text-decoration:none;font-size:0.8rem;">Ver documentacion</a>' if ep.doc_url else ""
+
+            st.markdown(f"""
+            <div style="background:white;border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.2rem;margin:0.4rem 0;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+                    <div style="display:flex;align-items:center;gap:0.6rem;">
+                        <span style="background:{metodo_color};color:white;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-weight:700;">{ep.metodo_http}</span>
+                        <strong style="font-size:0.95rem;color:#1a1a2e;">{ep.nombre}</strong>
+                    </div>
+                    {col_status}
+                </div>
+                <div style="margin:0.3rem 0;">{endpoint_display}</div>
+                <div style="font-size:0.82rem;color:#6b7280;margin:0.3rem 0;">{ep.descripcion or ''}</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.4rem;">
+                    <span style="font-size:0.75rem;color:#9ca3af;">{doc_link}{sync_info}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        st.markdown('<p class="section-header">Probar Endpoint</p>', unsafe_allow_html=True)
+        ep_options = [e for e in endpoints if e.endpoint_url and "{" not in (e.endpoint_url or "")]
+        if ep_options:
+            selected_ep = st.selectbox(
+                "Seleccionar endpoint",
+                options=ep_options,
+                format_func=lambda e: f"{e.categoria} > {e.nombre} ({e.endpoint_url})"
+            )
+            if st.button("Probar Conexion", type="primary"):
+                with st.spinner(f"Consultando {selected_ep.endpoint_url}..."):
+                    client = ObumaClient()
+                    result = run_async(client.test_endpoint(selected_ep.endpoint_url))
+                    if "error" in result:
+                        st.error(f"Error: {result.get('error', '')[:200]}")
+                    else:
+                        total_items = result.get("data-total-items", result.get("data-actual-total", "?"))
+                        data_list = result.get("data", [])
+                        st.success(f"Conexion exitosa. Total registros: {total_items}")
+                        if data_list and len(data_list) > 0:
+                            st.json(data_list[:3])
+
     finally:
         db.close()
 
