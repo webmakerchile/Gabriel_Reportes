@@ -20,23 +20,23 @@ API_CATALOG = [
             },
             {
                 "nombre": "API : Clientes Contactos",
-                "endpoint_url": "/clientesContactos.list.json/{RecursoId}",
+                "endpoint_url": "/clientesContactos.listAll.json",
                 "metodo_http": "GET",
                 "descripcion": "Listar contactos por cliente, listar todos los contactos, obtener contacto por ID. Endpoints: list/{id}, listAll, findById/{id}",
                 "parametros": "RecursoId (ID del cliente)",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/592/api--clientes-contactos",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
             {
                 "nombre": "API : Clientes Direcciones",
-                "endpoint_url": "/clientesDirecciones.list.json/{RecursoId}",
+                "endpoint_url": "/clientesDirecciones.listAll.json",
                 "metodo_http": "GET",
                 "descripcion": "Listar direcciones por cliente, listar todas las direcciones, obtener direccion por ID. Endpoints: list/{id}, listAll, findById/{id}",
                 "parametros": "RecursoId (ID del cliente)",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/593/api--clientes-direcciones",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
         ]
     },
@@ -51,8 +51,8 @@ API_CATALOG = [
                 "descripcion": "Listar, buscar por ID/RUT, crear y actualizar proveedores. Endpoints: list, findById/{id}, findByRut/{rut}, create, update",
                 "parametros": "Sin parametros requeridos para listar",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/157/api--proveedores",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
         ]
     },
@@ -64,11 +64,12 @@ API_CATALOG = [
                 "nombre": "API : Productos",
                 "endpoint_url": "/productos.list.json",
                 "metodo_http": "GET",
-                "descripcion": "Listar productos, consultar precios, gestionar categorias/subcategorias/fabricantes/imagenes. Endpoints: list, listByCodigosProveedores, create, update. Sub-endpoints: productosCategorias, productosSubCategorias, productosFabricantes, productosImagenes, productosConsultaPrecios",
+                "descripcion": "Listar productos con categorias, subcategorias, fabricantes, precios. Sub-endpoints: productosCategorias, productosSubCategorias, productosFabricantes, productosImagenes, productosConsultaPrecios",
                 "parametros": "id, tipo, codigo_sku, codigo_barra, categoria, subcategoria, fabricante, activo",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/13/api--productos",
                 "implementado": True,
                 "sync_habilitado": True,
+                "notas": "Sync incluye: productos, categorias, subcategorias, fabricantes, precios",
             },
         ]
     },
@@ -83,8 +84,8 @@ API_CATALOG = [
                 "descripcion": "Listar todos los empleados, activos, inactivos, usuarios activos. Buscar por ID o RUT. Endpoints: list, listActivos, listInactivos, listUsuarios, findById/{id}, findByRut/{rut}",
                 "parametros": "Sin parametros requeridos para listar",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/158/api--empleados",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
             {
                 "nombre": "API : Remuneraciones",
@@ -93,8 +94,8 @@ API_CATALOG = [
                 "descripcion": "Listar remuneraciones de empleados",
                 "parametros": "Consultar documentacion",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/741/api--remuneraciones",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
         ]
     },
@@ -106,31 +107,32 @@ API_CATALOG = [
                 "nombre": "API : Ventas",
                 "endpoint_url": "/ventas.list.json",
                 "metodo_http": "GET",
-                "descripcion": "Listar ventas con filtros avanzados, items, referencias, por cliente/RUT. Endpoints: list, listItems, listReferencias, listLast, findById/{id}, listOne/{id}, listByCustomer (POST), listByCustomerRut (POST), deleteNotaVenta",
+                "descripcion": "Listar ventas con filtros avanzados, items, referencias. Sync incluye ventas + items detallados",
                 "parametros": "id_dcto_desde, tipo_dcto, folio_dcto, external_id, mes, ano, fecha, fecha_desde, fecha_hasta, total, total_pagado, total_por_pagar, cliente, cliente_rut, sucursal, bodega, usuario, vendedor",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/160/api--ventas",
                 "implementado": True,
                 "sync_habilitado": True,
+                "notas": "Sync incluye: ventas + ventas items detallados",
             },
             {
                 "nombre": "API : Ventas > Cotizaciones",
                 "endpoint_url": "/ventasCotizaciones.list.json",
                 "metodo_http": "GET",
-                "descripcion": "Listar cotizaciones, items, ultimo folio, buscar por ID. Crear, actualizar, eliminar, enviar email, actualizar estado. Endpoints: list, listItems, listLast, findById/{id}, create, update, delete, sendEmail/{id}, updateEstado",
+                "descripcion": "Listar cotizaciones, items, ultimo folio, buscar por ID. Crear, actualizar, eliminar, enviar email, actualizar estado",
                 "parametros": "id_dcto_desde, folio_dcto, external_id, mes, ano, fecha, fecha_desde, fecha_hasta, total, cliente, cliente_rut, sucursal, usuario",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/332/api--ventas--cotizaciones",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
             {
                 "nombre": "API : Ventas > Cobros",
                 "endpoint_url": "/ventasCobros.list.json",
                 "metodo_http": "GET",
-                "descripcion": "Listar cobros registrados, crear nuevos cobros para documentos de venta. Endpoints: list, create (POST)",
+                "descripcion": "Listar cobros registrados, crear nuevos cobros para documentos de venta",
                 "parametros": "mes, ano, fecha_ingreso_desde, fecha_ingreso_hasta, origen, compra_id",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/333/api--ventas--cobros",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
             {
                 "nombre": "API : Ventas > Enviar Ventas a OBUMA via API",
@@ -139,28 +141,31 @@ API_CATALOG = [
                 "descripcion": "Crear documentos de venta en Obuma via API. Permite enviar facturas, boletas y otros DTE directamente",
                 "parametros": "Datos completos del documento de venta en JSON",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/141/api--ventas--enviar-ventas-a-obuma-via-api",
-                "implementado": False,
+                "implementado": True,
                 "sync_habilitado": False,
+                "notas": "Endpoint de escritura - no requiere sync",
             },
             {
                 "nombre": "API : Ventas > Consultar Boletas electronicas emitidas",
                 "endpoint_url": "/ventas.list.json?tipo_dcto=39",
                 "metodo_http": "GET",
-                "descripcion": "Consultar boletas electronicas emitidas filtrando por tipo documento 39 (Boleta Electronica)",
+                "descripcion": "Consultar boletas electronicas emitidas filtrando por tipo documento 39",
                 "parametros": "tipo_dcto=39, mas filtros de ventas.list",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/142/api--ventas--consultar-boletas-electronicas-emitidas",
-                "implementado": False,
+                "implementado": True,
                 "sync_habilitado": False,
+                "notas": "Incluido en sync de ventas con filtro tipo_dcto",
             },
             {
                 "nombre": "API : Ventas > Consultar ventas por RUT cliente",
                 "endpoint_url": "/ventas.listByCustomerRut.json",
                 "metodo_http": "POST",
-                "descripcion": "Consultar ventas emitidas en OBUMA filtradas por RUT del cliente. Soporta busqueda por periodo, folio o todas",
+                "descripcion": "Consultar ventas emitidas filtradas por RUT del cliente",
                 "parametros": "rutCliente, tipoBusqueda (all/periodo/folio), mes, ano, folio",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/143/api--ventas--consultar-ventas-emitidas-en-obuma-por-rut-del-cliente",
-                "implementado": False,
+                "implementado": True,
                 "sync_habilitado": False,
+                "notas": "Consulta bajo demanda - datos incluidos en sync ventas",
             },
             {
                 "nombre": "API : Ventas > Consultar DTE emitidos",
@@ -169,8 +174,8 @@ API_CATALOG = [
                 "descripcion": "Consultar documentos tributarios electronicos (DTE) emitidos",
                 "parametros": "Filtros de DTE emitidos",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/591/api--ventas--consultar-dte-emitidos",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
         ]
     },
@@ -182,7 +187,7 @@ API_CATALOG = [
                 "nombre": "API : Compras",
                 "endpoint_url": "/compras.list.json",
                 "metodo_http": "GET",
-                "descripcion": "Listar compras con filtros avanzados, crear y actualizar compras con detalle de items. Endpoints: list, create, update",
+                "descripcion": "Listar compras con filtros avanzados, crear y actualizar compras con detalle de items",
                 "parametros": "id_dcto_desde, tipo_dcto, folio_dcto, mes_contable, ano_contable, fecha, fecha_desde, fecha_hasta, total, total_pagado, total_por_pagar, proveedor, proveedor_rut, sucursal, bodega",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/159/api--compras",
                 "implementado": True,
@@ -195,14 +200,14 @@ API_CATALOG = [
                 "descripcion": "Listar pagos de compras con filtros. Origenes: compras, boletas-honorarios, pago-iva, remuneraciones, anticipos-proveedores, pago-imposiciones",
                 "parametros": "mes, ano, fecha_ingreso_desde, fecha_ingreso_hasta, origen, compra_id. Limite 500 registros",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/596/api--compras--pagos",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
             {
                 "nombre": "API : Compras OC",
                 "endpoint_url": "/comprasOc.list.json",
                 "metodo_http": "GET",
-                "descripcion": "Ordenes de compra: listar, items, ultimo folio, buscar por ID, crear, actualizar. Endpoints: list, listItems, listLast, findById/{id}, create, update",
+                "descripcion": "Ordenes de compra: listar, items, ultimo folio, buscar por ID, crear, actualizar",
                 "parametros": "id_dcto_desde, folio_dcto, mes, ano, fecha, fecha_desde, fecha_hasta, total, proveedor, sucursal, bodega, estado, forma_pago, metodo_despacho, moneda, centro_costo, concepto_gasto",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/331/api--compras-oc",
                 "implementado": True,
@@ -215,8 +220,8 @@ API_CATALOG = [
                 "descripcion": "Listar documentos tributarios electronicos (DTE) recibidos de proveedores",
                 "parametros": "Filtros de DTE recibidos",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/589/api--compras-dte-recibidos",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
         ]
     },
@@ -241,8 +246,8 @@ API_CATALOG = [
                 "descripcion": "Listar gastos menores registrados en el modulo de compras",
                 "parametros": "Consultar documentacion",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/590/api--compras-gastos-menores",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
         ]
     },
@@ -277,8 +282,8 @@ API_CATALOG = [
                 "descripcion": "Gestion de leads y oportunidades de venta via API del CRM de Obuma",
                 "parametros": "Consultar documentacion",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/545/crm-manejo-de-leads-por-api",
-                "implementado": False,
-                "sync_habilitado": False,
+                "implementado": True,
+                "sync_habilitado": True,
             },
             {
                 "nombre": "Conectar OBUMA ERP con POWER BI",
@@ -368,7 +373,36 @@ API_CATALOG = [
 def seed_api_catalog(db):
     existing = db.query(ObumaApiEndpoint).count()
     if existing > 0:
-        logger.info(f"API catalog already has {existing} entries, skipping seed")
+        for cat in API_CATALOG:
+            for ep in cat["endpoints"]:
+                entry = db.query(ObumaApiEndpoint).filter(
+                    ObumaApiEndpoint.nombre == ep["nombre"]
+                ).first()
+                if entry:
+                    entry.implementado = ep.get("implementado", False)
+                    entry.sync_habilitado = ep.get("sync_habilitado", False)
+                    entry.endpoint_url = ep.get("endpoint_url") or entry.endpoint_url
+                    entry.notas = ep.get("notas") or entry.notas
+                    if ep.get("implementado") and not entry.estado.startswith("sincronizado"):
+                        entry.estado = "implementado"
+                else:
+                    entry = ObumaApiEndpoint(
+                        categoria=cat["categoria"],
+                        categoria_orden=cat["categoria_orden"],
+                        nombre=ep["nombre"],
+                        endpoint_url=ep.get("endpoint_url"),
+                        metodo_http=ep.get("metodo_http", "GET"),
+                        descripcion=ep.get("descripcion"),
+                        parametros=ep.get("parametros"),
+                        doc_url=ep.get("doc_url"),
+                        implementado=ep.get("implementado", False),
+                        sync_habilitado=ep.get("sync_habilitado", False),
+                        estado="implementado" if ep.get("implementado") else "disponible",
+                        notas=ep.get("notas"),
+                    )
+                    db.add(entry)
+        db.commit()
+        logger.info(f"API catalog updated ({existing} entries)")
         return existing
 
     count = 0

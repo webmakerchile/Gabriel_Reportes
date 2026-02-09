@@ -178,6 +178,283 @@ class ReporteGenerado(Base):
     generado_at = Column(DateTime, server_default=func.now())
 
 
+class Proveedor(Base):
+    __tablename__ = "proveedores"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    rut = Column(String(20), nullable=True)
+    razon_social = Column(String(255), nullable=True)
+    nombre_fantasia = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True)
+    telefono = Column(String(50), nullable=True)
+    direccion = Column(Text, nullable=True)
+    activo = Column(Boolean, default=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_proveedores_tenant_obuma", "tenant_id", "obuma_id", unique=True),
+    )
+
+
+class ClienteContacto(Base):
+    __tablename__ = "clientes_contactos"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    cliente_id_obuma = Column(String(50), nullable=True)
+    nombre = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True)
+    telefono = Column(String(50), nullable=True)
+    cargo = Column(String(255), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class ClienteDireccion(Base):
+    __tablename__ = "clientes_direcciones"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    cliente_id_obuma = Column(String(50), nullable=True)
+    direccion = Column(Text, nullable=True)
+    ciudad = Column(String(255), nullable=True)
+    comuna = Column(String(255), nullable=True)
+    region = Column(String(255), nullable=True)
+    tipo = Column(String(50), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class Empleado(Base):
+    __tablename__ = "empleados"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    rut = Column(String(20), nullable=True)
+    nombre = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True)
+    cargo = Column(String(255), nullable=True)
+    activo = Column(Boolean, default=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_empleados_tenant_obuma", "tenant_id", "obuma_id", unique=True),
+    )
+
+
+class Remuneracion(Base):
+    __tablename__ = "remuneraciones"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    empleado_rut = Column(String(20), nullable=True)
+    periodo = Column(String(20), nullable=True)
+    total_haberes = Column(Float, default=0)
+    total_descuentos = Column(Float, default=0)
+    liquido = Column(Float, default=0)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class VentaItem(Base):
+    __tablename__ = "ventas_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    venta_id_obuma = Column(String(50), nullable=True)
+    producto_nombre = Column(String(255), nullable=True)
+    producto_sku = Column(String(100), nullable=True)
+    cantidad = Column(Float, default=0)
+    precio_unitario = Column(Float, default=0)
+    descuento = Column(Float, default=0)
+    total = Column(Float, default=0)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class VentaCotizacion(Base):
+    __tablename__ = "ventas_cotizaciones"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    folio = Column(String(50), nullable=True)
+    fecha = Column(DateTime, nullable=True)
+    cliente_rut = Column(String(20), nullable=True)
+    cliente_nombre = Column(String(255), nullable=True)
+    total = Column(Float, default=0)
+    estado = Column(String(50), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class VentaCobro(Base):
+    __tablename__ = "ventas_cobros"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    venta_id_obuma = Column(String(50), nullable=True)
+    fecha = Column(DateTime, nullable=True)
+    monto = Column(Float, default=0)
+    forma_pago = Column(String(100), nullable=True)
+    estado = Column(String(50), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class VentaDte(Base):
+    __tablename__ = "ventas_dte"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    tipo_dcto = Column(String(50), nullable=True)
+    folio = Column(String(50), nullable=True)
+    fecha = Column(DateTime, nullable=True)
+    rut_receptor = Column(String(20), nullable=True)
+    razon_social = Column(String(255), nullable=True)
+    monto_total = Column(Float, default=0)
+    estado_sii = Column(String(100), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class CompraOC(Base):
+    __tablename__ = "compras_oc"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    folio = Column(String(50), nullable=True)
+    fecha = Column(DateTime, nullable=True)
+    proveedor = Column(String(255), nullable=True)
+    proveedor_rut = Column(String(20), nullable=True)
+    total = Column(Float, default=0)
+    estado = Column(String(50), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class CompraPago(Base):
+    __tablename__ = "compras_pagos"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    compra_id_obuma = Column(String(50), nullable=True)
+    fecha = Column(DateTime, nullable=True)
+    monto = Column(Float, default=0)
+    forma_pago = Column(String(100), nullable=True)
+    origen = Column(String(100), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class CompraDteRecibido(Base):
+    __tablename__ = "compras_dte_recibidos"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    tipo_dcto = Column(String(50), nullable=True)
+    folio = Column(String(50), nullable=True)
+    fecha = Column(DateTime, nullable=True)
+    rut_emisor = Column(String(20), nullable=True)
+    razon_social = Column(String(255), nullable=True)
+    monto_total = Column(Float, default=0)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class GastoMenor(Base):
+    __tablename__ = "gastos_menores"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    fecha = Column(DateTime, nullable=True)
+    descripcion = Column(Text, nullable=True)
+    monto = Column(Float, default=0)
+    categoria = Column(String(255), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class CrmLead(Base):
+    __tablename__ = "crm_leads"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    nombre = Column(String(255), nullable=True)
+    empresa = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True)
+    telefono = Column(String(50), nullable=True)
+    estado = Column(String(50), nullable=True)
+    origen = Column(String(100), nullable=True)
+    monto_estimado = Column(Float, default=0)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class ProductoCategoria(Base):
+    __tablename__ = "producto_categorias"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    nombre = Column(String(255), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class ProductoSubCategoria(Base):
+    __tablename__ = "producto_subcategorias"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    nombre = Column(String(255), nullable=True)
+    categoria_id_obuma = Column(String(50), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class ProductoFabricante(Base):
+    __tablename__ = "producto_fabricantes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    nombre = Column(String(255), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
+class ProductoPrecio(Base):
+    __tablename__ = "producto_precios"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    obuma_id = Column(String(50), nullable=True)
+    producto_id_obuma = Column(String(50), nullable=True)
+    producto_nombre = Column(String(255), nullable=True)
+    precio = Column(Float, default=0)
+    lista_precio = Column(String(100), nullable=True)
+    data_json = Column(Text, nullable=True)
+    sincronizado_at = Column(DateTime, server_default=func.now())
+
+
 class ObumaApiEndpoint(Base):
     __tablename__ = "obuma_api_endpoints"
 

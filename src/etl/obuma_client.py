@@ -142,9 +142,6 @@ class ObumaClient:
     async def get_compras_oc(self, params: dict = None) -> dict:
         return await self._get("comprasOc.list.json", params)
 
-    async def get_compras_list(self, params: dict = None) -> dict:
-        return await self._get("compras.list.json", params)
-
     async def get_compras_pagos(self, params: dict = None) -> dict:
         return await self._get("comprasPagos.list.json", params)
 
