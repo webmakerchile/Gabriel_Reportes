@@ -34,7 +34,7 @@ src/
 reports/                    # Directorio de reportes generados
 ```
 
-## Database Models (26 tablas)
+## Database Models (28 tablas)
 ### Core
 - **Tenant**: Multi-tenant support
 - **SyncLog**: Log de sincronizaciones con API
@@ -73,6 +73,10 @@ reports/                    # Directorio de reportes generados
 ### Contabilidad
 - **ContabilidadHistorico**: Libro diario (debe/haber)
 - **GastoMenor**: Gastos menores (fecha, descripcion, monto, categoria)
+
+### Vendedores (Tracking)
+- **VendedorMeta**: Metas mensuales por vendedor (anio, mes, meta_repuestos, meta_maquinaria)
+- **VendedorCartera**: Asignacion de clientes por vendedor (cliente_id, fecha_asignacion, activo)
 
 ### Otros
 - **Empleado**: Empleados (rut, nombre, email, cargo, activo)
@@ -118,8 +122,22 @@ reports/                    # Directorio de reportes generados
 9. **Data JSON**: Cada modelo almacena data_json con respuesta cruda completa de API
 10. **Scheduler Diario**: Genera reportes por vendedor automaticamente a las 23:50 Chile
 
-## Dashboard Sections (13 pages)
-- **Dashboard**: Centro de Mando con filtros globales (fecha, vendedor), 8 KPIs, 8 graficos, tablas top clientes/transacciones
+## Vendedores Tracking (5 vendedores medidos)
+| Nombre | Cargo | obuma_id | Meta Rep | Meta Maq |
+|--------|-------|----------|----------|----------|
+| Gabriel Hoyos | Vend001 | 28856 | 58,900,000 | 2,000,000 |
+| Jhonatan Ruiz | Vend002 | 28886 | 89,900,000 | 4,000,000 |
+| Ernesto Quintiliani | Vend003 | 28887 | 58,900,000 | 4,000,000 |
+| Pablo Pinto | Vend004 | 28891 | 36,900,000 | 2,000,000 |
+| Jesus Gonzalez | Vend005 | 28892 | 36,900,000 | 2,000,000 |
+- Metas mensuales por vendedor (Repuestos y Maquinaria)
+- Cartera de clientes asignada por vendedor (auto-detectada desde ventas)
+- Dashboard filtra por defecto solo estos 5 vendedores
+- NOTA: Actualmente todas las ventas se clasifican como Repuestos (pendiente clasificar Rep vs Maq por categoria producto)
+
+## Dashboard Sections (14 pages)
+- **Dashboard**: Centro de Mando con filtros globales (fecha, vendedor), 8 KPIs, 8 graficos, tablas top clientes/transacciones (filtrado por 5 vendedores por defecto)
+- **Vendedores**: Rendimiento vs Metas (Rep/Maq mensual), Cartera de Clientes (asignacion/baja), Configurar Metas (edicion inline)
 - **Ventas**: Documentos con filtro vendedor, grafico mensual, distribucion tipo documento, items, cotizaciones, cobros, DTE
 - **Clientes**: Busqueda por nombre/RUT, top clientes facturacion, actividad clientes, contactos, direcciones
 - **Proveedores**: Lista proveedores activos

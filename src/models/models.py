@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey, Boolean, Date, BigInteger, Index
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey, Boolean, Date, BigInteger, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from src.database import Base
@@ -481,3 +481,38 @@ class ObumaApiEndpoint(Base):
     notas = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class VendedorMeta(Base):
+    __tablename__ = "vendedor_metas"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    empleado_obuma_id = Column(String(50), nullable=False)
+    anio = Column(Integer, nullable=False)
+    mes = Column(Integer, nullable=False)
+    meta_repuestos = Column(Float, default=0)
+    meta_maquinaria = Column(Float, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "empleado_obuma_id", "anio", "mes", name="uq_vendedor_meta_tenant_empleado_anio_mes"),
+    )
+
+
+class VendedorCartera(Base):
+    __tablename__ = "vendedor_carteras"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    empleado_obuma_id = Column(String(50), nullable=False)
+    cliente_id = Column(Integer, ForeignKey("clientes_finales.id"), nullable=False)
+    fecha_asignacion = Column(Date, nullable=True)
+    fecha_baja = Column(Date, nullable=True)
+    activo = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "empleado_obuma_id", "cliente_id", name="uq_vendedor_cartera_tenant_empleado_cliente"),
+    )

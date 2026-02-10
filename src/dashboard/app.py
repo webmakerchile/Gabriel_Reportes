@@ -17,7 +17,8 @@ from src.models.models import (
     Proveedor, ClienteContacto, ClienteDireccion, Empleado, Remuneracion,
     VentaItem, VentaCotizacion, VentaCobro, VentaDte, CompraOC, CompraPago,
     CrmLead, ProductoCategoria,
-    ProductoSubCategoria, ProductoFabricante, ProductoPrecio, CostoHistorico
+    ProductoSubCategoria, ProductoFabricante, ProductoPrecio, CostoHistorico,
+    VendedorMeta, VendedorCartera
 )
 from src.etl.sync_service import SyncService
 from src.etl.obuma_client import ObumaClient
@@ -287,7 +288,7 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navegacion",
-    ["Dashboard", "Ventas", "Clientes", "Proveedores", "Productos",
+    ["Dashboard", "Vendedores", "Ventas", "Clientes", "Proveedores", "Productos",
      "Empleados", "Compras", "Contabilidad", "CRM",
      "API Obuma", "Reportes", "Sincronizacion", "Auditoria"],
     index=0,
@@ -314,14 +315,23 @@ if page == "Dashboard":
         with fc2:
             dash_date_to = st.date_input("Hasta", value=date.today(), key="dash_to")
         with fc3:
+            TRACKED_VENDEDOR_IDS = ["28856", "28886", "28887", "28891", "28892"]
             empleados_list = db.query(Empleado).filter(Empleado.activo == True).order_by(Empleado.nombre).all()
             vendedor_names = {e.obuma_id: e.nombre for e in empleados_list}
-            vendedor_options_all = ["Todos"] + [f"{e.nombre} ({e.cargo or 'Sin cargo'})" for e in empleados_list]
-            vendedor_sel_dash = st.multiselect("Vendedores", vendedor_options_all, default=["Todos"], key="dash_vend")
+            tracked_empleados = [e for e in empleados_list if e.obuma_id in TRACKED_VENDEDOR_IDS]
+            other_empleados = [e for e in empleados_list if e.obuma_id not in TRACKED_VENDEDOR_IDS]
+            vendedor_options_all = ["Todos (5 Vendedores)"] + [f"{e.nombre} ({e.cargo or 'Sin cargo'})" for e in tracked_empleados]
+            if other_empleados:
+                vendedor_options_all += ["---"] + [f"{e.nombre} ({e.cargo or 'Sin cargo'})" for e in other_empleados]
+            vendedor_sel_dash = st.multiselect("Vendedores", vendedor_options_all, default=["Todos (5 Vendedores)"], key="dash_vend")
 
         selected_vendedor_ids = []
-        if "Todos" not in vendedor_sel_dash and vendedor_sel_dash:
+        if "Todos (5 Vendedores)" in vendedor_sel_dash:
+            selected_vendedor_ids = TRACKED_VENDEDOR_IDS
+        elif vendedor_sel_dash:
             for sel in vendedor_sel_dash:
+                if sel == "---":
+                    continue
                 for e in empleados_list:
                     if f"{e.nombre} ({e.cargo or 'Sin cargo'})" == sel:
                         selected_vendedor_ids.append(e.obuma_id)
@@ -682,6 +692,392 @@ if page == "Dashboard":
                 st.dataframe(df_top, use_container_width=True, hide_index=True, height=400)
             else:
                 st.info("Sin datos de clientes.")
+    finally:
+        db.close()
+
+
+# ============================================================
+# VENDEDORES
+# ============================================================
+elif page == "Vendedores":
+    st.markdown('<p class="page-title">Gestion de Vendedores</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-subtitle">Rendimiento, metas y cartera de clientes por vendedor</p>', unsafe_allow_html=True)
+
+    TRACKED_VENDEDORES = ["28856", "28886", "28887", "28891", "28892"]
+
+    db = get_db()
+    try:
+        tab_rend, tab_cartera, tab_metas = st.tabs([
+            "📊 Rendimiento vs Metas", "👥 Cartera de Clientes", "🎯 Configurar Metas"
+        ])
+
+        current_year = date.today().year
+
+        vendedores_map = {}
+        for vid in TRACKED_VENDEDORES:
+            emp = db.query(Empleado).filter(Empleado.obuma_id == vid).first()
+            if emp:
+                vendedores_map[vid] = emp
+
+        # ── TAB 1: Rendimiento vs Metas ──
+        with tab_rend:
+            st.markdown('<p class="section-header">Rendimiento Mensual vs Metas</p>', unsafe_allow_html=True)
+
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                rend_mes = st.selectbox("Mes", list(range(1, 13)),
+                                        index=date.today().month - 1,
+                                        format_func=lambda m: MONTH_LABELS[m - 1],
+                                        key="vend_rend_mes")
+            with rc2:
+                rend_anio = st.selectbox("Año", list(range(current_year - 2, current_year + 2)),
+                                         index=2, key="vend_rend_anio")
+
+            st.markdown("---")
+
+            summary_meta_rep = 0
+            summary_meta_maq = 0
+            summary_actual_rep = 0
+            summary_actual_maq = 0
+            chart_names = []
+            chart_metas = []
+            chart_actuals = []
+
+            for vid in TRACKED_VENDEDORES:
+                emp = vendedores_map.get(vid)
+                if not emp:
+                    continue
+
+                meta = db.query(VendedorMeta).filter(
+                    VendedorMeta.empleado_obuma_id == vid,
+                    VendedorMeta.anio == rend_anio,
+                    VendedorMeta.mes == rend_mes
+                ).first()
+
+                meta_rep = meta.meta_repuestos if meta else 0
+                meta_maq = meta.meta_maquinaria if meta else 0
+                meta_total = meta_rep + meta_maq
+
+                actual_rep_result = db.query(func.sum(VentaHistorico.subtotal)).filter(
+                    VentaHistorico.vendedor_id == vid,
+                    extract('year', VentaHistorico.fecha) == rend_anio,
+                    extract('month', VentaHistorico.fecha) == rend_mes,
+                    VentaHistorico.anulada == False
+                ).scalar() or 0
+
+                actual_maq = 0
+                actual_total = actual_rep_result + actual_maq
+
+                summary_meta_rep += meta_rep
+                summary_meta_maq += meta_maq
+                summary_actual_rep += actual_rep_result
+                summary_actual_maq += actual_maq
+
+                chart_names.append(emp.nombre.split(" ")[0] if emp.nombre else vid)
+                chart_metas.append(meta_total)
+                chart_actuals.append(actual_total)
+
+                pct_rep = (actual_rep_result / meta_rep * 100) if meta_rep > 0 else 0
+                pct_maq = (actual_maq / meta_maq * 100) if meta_maq > 0 else 0
+                pct_total = (actual_total / meta_total * 100) if meta_total > 0 else 0
+
+                if pct_total >= 100:
+                    border_color = ACCENT_GREEN
+                elif pct_total >= 70:
+                    border_color = ACCENT_AMBER
+                else:
+                    border_color = ACCENT_RED
+
+                st.markdown(f"""
+                <div style="background:{CARD_BG}; border:1px solid {border_color}; border-radius:12px;
+                            padding:1rem 1.5rem; margin-bottom:0.8rem; border-left:4px solid {border_color};">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="font-size:1.1rem; font-weight:600; color:{TEXT_PRIMARY};">{emp.nombre}</span>
+                            <span style="font-size:0.8rem; color:{TEXT_SECONDARY}; margin-left:0.5rem;">{emp.cargo or ''}</span>
+                        </div>
+                        <span style="font-size:1.3rem; font-weight:700; color:{border_color};">{pct_total:.0f}%</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                vc1, vc2, vc3 = st.columns(3)
+                with vc1:
+                    st.caption(f"🔧 Repuestos: {format_clp(actual_rep_result)} / {format_clp(meta_rep)}")
+                    prog_rep = min(pct_rep / 100, 1.0)
+                    st.progress(prog_rep if prog_rep >= 0 else 0)
+                with vc2:
+                    st.caption(f"🏗️ Maquinaria: {format_clp(actual_maq)} / {format_clp(meta_maq)}")
+                    prog_maq = min(pct_maq / 100, 1.0)
+                    st.progress(prog_maq if prog_maq >= 0 else 0)
+                with vc3:
+                    st.caption(f"📊 Total: {format_clp(actual_total)} / {format_clp(meta_total)}")
+                    prog_total = min(pct_total / 100, 1.0)
+                    st.progress(prog_total if prog_total >= 0 else 0)
+
+                st.markdown("")
+
+            st.markdown("---")
+            st.markdown('<p class="section-header">Resumen General</p>', unsafe_allow_html=True)
+
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            with sc1:
+                render_metric("Meta Repuestos", format_clp(summary_meta_rep), "🔧", ACCENT_BLUE)
+            with sc2:
+                render_metric("Actual Repuestos", format_clp(summary_actual_rep), "✅", ACCENT_GREEN)
+            with sc3:
+                render_metric("Meta Maquinaria", format_clp(summary_meta_maq), "🏗️", ACCENT_AMBER)
+            with sc4:
+                render_metric("Actual Maquinaria", format_clp(summary_actual_maq), "📦", ACCENT_PURPLE)
+
+            st.markdown("")
+            st.markdown('<p class="section-header">Meta vs Real por Vendedor</p>', unsafe_allow_html=True)
+
+            if chart_names:
+                fig_rend = go.Figure()
+                fig_rend.add_trace(go.Bar(
+                    x=chart_names, y=chart_metas, name="Meta",
+                    marker_color=ACCENT_BLUE, opacity=0.7,
+                    text=[format_clp(v) for v in chart_metas], textposition="auto"
+                ))
+                fig_rend.add_trace(go.Bar(
+                    x=chart_names, y=chart_actuals, name="Real",
+                    marker_color=ACCENT_GREEN, opacity=0.85,
+                    text=[format_clp(v) for v in chart_actuals], textposition="auto"
+                ))
+                fig_rend.update_layout(**chart_layout(height=400))
+                fig_rend.update_layout(barmode="group")
+                st.plotly_chart(fig_rend, use_container_width=True)
+
+        # ── TAB 2: Cartera de Clientes ──
+        with tab_cartera:
+            st.markdown('<p class="section-header">Cartera de Clientes por Vendedor</p>', unsafe_allow_html=True)
+
+            vendedor_options_cart = [(vid, vendedores_map[vid].nombre) for vid in TRACKED_VENDEDORES if vid in vendedores_map]
+            if vendedor_options_cart:
+                sel_cart_label = st.selectbox(
+                    "Seleccionar Vendedor",
+                    [f"{name} ({vid})" for vid, name in vendedor_options_cart],
+                    key="vend_cart_sel"
+                )
+                sel_cart_vid = sel_cart_label.split("(")[-1].replace(")", "").strip()
+
+                st.markdown("---")
+
+                cartera_items = db.query(VendedorCartera, ClienteFinal).join(
+                    ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
+                ).filter(
+                    VendedorCartera.empleado_obuma_id == sel_cart_vid,
+                    VendedorCartera.activo == True
+                ).all()
+
+                twelve_months_ago = date.today() - timedelta(days=365)
+
+                if cartera_items:
+                    st.markdown(f"**{len(cartera_items)} clientes activos asignados**")
+                    rows = []
+                    for vc, cli in cartera_items:
+                        ventas_12m = db.query(func.sum(VentaHistorico.subtotal)).filter(
+                            VentaHistorico.cliente_id == cli.id,
+                            VentaHistorico.vendedor_id == sel_cart_vid,
+                            VentaHistorico.anulada == False,
+                            func.date(VentaHistorico.fecha) >= twelve_months_ago
+                        ).scalar() or 0
+
+                        rows.append({
+                            "Cliente": cli.nombre,
+                            "RUT": cli.rut or "—",
+                            "Asignado": str(vc.fecha_asignacion) if vc.fecha_asignacion else "—",
+                            "Ventas 12M": format_clp(ventas_12m),
+                            "ID": cli.id
+                        })
+
+                    df_cart = pd.DataFrame(rows)
+                    st.dataframe(df_cart[["Cliente", "RUT", "Asignado", "Ventas 12M"]],
+                                 use_container_width=True, hide_index=True, height=400)
+                else:
+                    st.info("Este vendedor no tiene clientes asignados.")
+
+                st.markdown("---")
+                st.markdown('<p class="section-header">Gestionar Cartera</p>', unsafe_allow_html=True)
+
+                gc1, gc2 = st.columns(2)
+
+                with gc1:
+                    st.markdown("**Agregar Cliente**")
+                    assigned_ids = [vc.cliente_id for vc, _ in cartera_items] if cartera_items else []
+                    unassigned = db.query(ClienteFinal).filter(
+                        ClienteFinal.activo == True,
+                        ~ClienteFinal.id.in_(assigned_ids) if assigned_ids else True
+                    ).order_by(ClienteFinal.nombre).limit(200).all()
+
+                    if unassigned:
+                        new_client_label = st.selectbox(
+                            "Cliente a agregar",
+                            [f"{c.nombre} ({c.rut or 'Sin RUT'})" for c in unassigned],
+                            key="vend_add_client"
+                        )
+                        if st.button("➕ Agregar a Cartera", key="btn_add_client"):
+                            idx = [f"{c.nombre} ({c.rut or 'Sin RUT'})" for c in unassigned].index(new_client_label)
+                            new_vc = VendedorCartera(
+                                empleado_obuma_id=sel_cart_vid,
+                                cliente_id=unassigned[idx].id,
+                                fecha_asignacion=date.today(),
+                                activo=True
+                            )
+                            db.add(new_vc)
+                            db.commit()
+                            st.success(f"Cliente asignado exitosamente.")
+                            st.rerun()
+                    else:
+                        st.caption("No hay clientes disponibles para asignar.")
+
+                with gc2:
+                    st.markdown("**Remover Cliente**")
+                    if cartera_items:
+                        remove_label = st.selectbox(
+                            "Cliente a remover",
+                            [f"{cli.nombre} ({cli.rut or 'Sin RUT'})" for _, cli in cartera_items],
+                            key="vend_remove_client"
+                        )
+                        if st.button("❌ Remover de Cartera", key="btn_remove_client"):
+                            idx = [f"{cli.nombre} ({cli.rut or 'Sin RUT'})" for _, cli in cartera_items].index(remove_label)
+                            vc_to_remove = cartera_items[idx][0]
+                            vc_to_remove.activo = False
+                            vc_to_remove.fecha_baja = date.today()
+                            db.commit()
+                            st.success("Cliente removido de la cartera.")
+                            st.rerun()
+                    else:
+                        st.caption("No hay clientes para remover.")
+
+                st.markdown("---")
+                st.markdown('<p class="section-header">Clientes por Vendedor</p>', unsafe_allow_html=True)
+
+                chart_vend_names = []
+                chart_vend_counts = []
+                for vid in TRACKED_VENDEDORES:
+                    emp = vendedores_map.get(vid)
+                    if not emp:
+                        continue
+                    count = db.query(func.count(VendedorCartera.id)).filter(
+                        VendedorCartera.empleado_obuma_id == vid,
+                        VendedorCartera.activo == True
+                    ).scalar() or 0
+                    chart_vend_names.append(emp.nombre.split(" ")[0] if emp.nombre else vid)
+                    chart_vend_counts.append(count)
+
+                if chart_vend_names:
+                    fig_cart = go.Figure(go.Bar(
+                        x=chart_vend_names, y=chart_vend_counts,
+                        marker_color=CHART_COLORS[:len(chart_vend_names)],
+                        text=chart_vend_counts, textposition="auto"
+                    ))
+                    fig_cart.update_layout(**chart_layout())
+                    st.plotly_chart(fig_cart, use_container_width=True)
+            else:
+                st.warning("No se encontraron vendedores registrados.")
+
+        # ── TAB 3: Configurar Metas ──
+        with tab_metas:
+            st.markdown('<p class="section-header">Configuracion de Metas Mensuales</p>', unsafe_allow_html=True)
+
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                meta_vendedor_opts = [(vid, vendedores_map[vid].nombre) for vid in TRACKED_VENDEDORES if vid in vendedores_map]
+                if meta_vendedor_opts:
+                    meta_sel_label = st.selectbox(
+                        "Vendedor",
+                        [f"{name} ({vid})" for vid, name in meta_vendedor_opts],
+                        key="vend_meta_sel"
+                    )
+                    meta_sel_vid = meta_sel_label.split("(")[-1].replace(")", "").strip()
+                else:
+                    meta_sel_vid = None
+                    st.warning("No hay vendedores registrados.")
+            with mc2:
+                meta_anio = st.selectbox("Año", list(range(current_year - 1, current_year + 3)),
+                                          index=1, key="vend_meta_anio")
+
+            if meta_sel_vid:
+                st.markdown("---")
+
+                existing_metas = db.query(VendedorMeta).filter(
+                    VendedorMeta.empleado_obuma_id == meta_sel_vid,
+                    VendedorMeta.anio == meta_anio
+                ).all()
+
+                meta_dict = {m.mes: m for m in existing_metas}
+
+                editor_data = []
+                for m in range(1, 13):
+                    meta_obj = meta_dict.get(m)
+                    editor_data.append({
+                        "Mes": MONTH_LABELS[m - 1],
+                        "Meta Repuestos": int(meta_obj.meta_repuestos) if meta_obj else 0,
+                        "Meta Maquinaria": int(meta_obj.meta_maquinaria) if meta_obj else 0,
+                    })
+
+                df_metas = pd.DataFrame(editor_data)
+
+                edited_df = st.data_editor(
+                    df_metas,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["Mes"],
+                    num_rows="fixed",
+                    key="meta_editor"
+                )
+
+                btn_c1, btn_c2 = st.columns(2)
+
+                with btn_c1:
+                    if st.button("💾 Guardar Metas", type="primary", key="btn_save_metas"):
+                        for i, row in edited_df.iterrows():
+                            mes_num = i + 1
+                            existing = meta_dict.get(mes_num)
+                            if existing:
+                                existing.meta_repuestos = float(row["Meta Repuestos"])
+                                existing.meta_maquinaria = float(row["Meta Maquinaria"])
+                            else:
+                                new_meta = VendedorMeta(
+                                    empleado_obuma_id=meta_sel_vid,
+                                    anio=meta_anio,
+                                    mes=mes_num,
+                                    meta_repuestos=float(row["Meta Repuestos"]),
+                                    meta_maquinaria=float(row["Meta Maquinaria"])
+                                )
+                                db.add(new_meta)
+                        db.commit()
+                        st.success("Metas guardadas exitosamente.")
+                        st.rerun()
+
+                with btn_c2:
+                    copy_from = st.selectbox("Copiar desde mes", list(range(1, 13)),
+                                              format_func=lambda m: MONTH_LABELS[m - 1],
+                                              key="vend_copy_from")
+                    if st.button("📋 Copiar a meses restantes", key="btn_copy_metas"):
+                        source_row = edited_df.iloc[copy_from - 1]
+                        rep_val = float(source_row["Meta Repuestos"])
+                        maq_val = float(source_row["Meta Maquinaria"])
+                        for mes_num in range(copy_from + 1, 13):
+                            existing = meta_dict.get(mes_num)
+                            if existing:
+                                existing.meta_repuestos = rep_val
+                                existing.meta_maquinaria = maq_val
+                            else:
+                                new_meta = VendedorMeta(
+                                    empleado_obuma_id=meta_sel_vid,
+                                    anio=meta_anio,
+                                    mes=mes_num,
+                                    meta_repuestos=rep_val,
+                                    meta_maquinaria=maq_val
+                                )
+                                db.add(new_meta)
+                        db.commit()
+                        st.success(f"Metas copiadas desde {MONTH_LABELS[copy_from - 1]} a los meses siguientes.")
+                        st.rerun()
+
     finally:
         db.close()
 
