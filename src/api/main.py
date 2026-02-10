@@ -24,7 +24,7 @@ app = FastAPI(
 )
 
 
-async def _background_startup():
+def _heavy_init():
     try:
         Base.metadata.create_all(bind=engine)
         from src.etl.api_catalog_seed import seed_api_catalog
@@ -42,13 +42,14 @@ async def _background_startup():
 
 @app.on_event("startup")
 async def on_startup():
-    asyncio.create_task(_background_startup())
-    logger.info("FastAPI started - heavy init running in background")
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _heavy_init)
+    logger.info("FastAPI started - heavy init running in separate thread")
 
 
 @app.get("/")
 def root():
-    return {"status": "ok"}
+    return {"status": "alive"}
 
 
 @app.post("/api/sync/all")
