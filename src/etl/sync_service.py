@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from datetime import datetime
 from sqlalchemy.orm import Session
 from src.etl.obuma_client import ObumaClient
@@ -148,7 +149,7 @@ class SyncService:
             if not obuma_id:
                 continue
 
-            rut = item.get("cliente_rut", "") or ""
+            rut_raw = (item.get("cliente_rut", "") or "").strip()
             nombre = item.get("cliente_razon_social", item.get("cliente_nombre_fantasia", ""))
             email = item.get("cliente_email", "")
             telefono = item.get("cliente_telefono", item.get("cliente_celular", ""))
@@ -157,25 +158,19 @@ class SyncService:
             comuna = item.get("cliente_comuna", "")
             ciudad = item.get("cliente_ciudad", "")
 
+            is_valid_rut = bool(rut_raw and re.match(r'^\d{1,2}\.\d{3}\.\d{3}-[\dkK]$', rut_raw))
+            unique_rut = rut_raw if is_valid_rut else f"OBU-{obuma_id}"
+
             existing = self.db.query(ClienteFinal).filter(
                 ClienteFinal.obuma_id == obuma_id,
                 ClienteFinal.tenant_id == self.tenant_id
             ).first()
 
-            if not existing and rut:
-                existing = self.db.query(ClienteFinal).filter(
-                    ClienteFinal.rut == rut,
-                    ClienteFinal.tenant_id == self.tenant_id
-                ).first()
-
-            unique_rut = rut if rut else f"OBU-{obuma_id}"
             if not existing:
-                dup = self.db.query(ClienteFinal).filter(
+                existing = self.db.query(ClienteFinal).filter(
                     ClienteFinal.rut == unique_rut,
                     ClienteFinal.tenant_id == self.tenant_id
                 ).first()
-                if dup:
-                    unique_rut = f"OBU-{obuma_id}"
 
             if existing:
                 existing.nombre = nombre or existing.nombre

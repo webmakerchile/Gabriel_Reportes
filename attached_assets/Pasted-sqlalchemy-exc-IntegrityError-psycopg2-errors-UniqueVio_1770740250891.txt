@@ -1,0 +1,67 @@
+sqlalchemy.exc.IntegrityError: (psycopg2.errors.UniqueViolation) duplicate key value violates unique constraint "ix_clientes_tenant_rut" DETAIL: Key (tenant_id, rut)=(1, SinRut) already exists. [SQL: INSERT INTO clientes_finales (tenant_id, rut, nombre, email, telefono, direccion, giro, comuna, ciudad, activo, obuma_id, data_json) SELECT p0::INTEGER, p1::VARCHAR, p2::VARCHAR, p3::VARCHAR, p4::VARCHAR, p5::TEXT, p6::VARCHAR, p7::VARCHAR, p8::VARCH ... 216518 characters truncated ... s_finales.id, clientes_finales.created_at, clientes_finales.updated_at, clientes_finales.id AS id__1] [parameters: {'direccion__0': '', 'nombre__0': ' ', 'telefono__0': '', 'email__0': '', 'giro__0': '', 'obuma_id__0': '96146', 'comuna__0': '', 'ciudad__0': '', 'tenant_id__0': 1, 'activo__0': True, 'rut__0': 'SinRut', 'data_json__0': '{"cliente_id": "96146", "cliente_rut": "SinRut", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "cliente_conta ... (1197 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "0", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__1': '', 'nombre__1': ' ', 'telefono__1': '', 'email__1': '', 'giro__1': '', 'obuma_id__1': '96149', 'comuna__1': '', 'ciudad__1': '', 'tenant_id__1': 1, 'activo__1': True, 'rut__1': 'SinRut', 'data_json__1': '{"cliente_id": "96149", "cliente_rut": "SinRut", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "cliente_conta ... (1197 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "0", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__2': '', 'nombre__2': ' ', 'telefono__2': '', 'email__2': '', 'giro__2': '', 'obuma_id__2': '96150', 'comuna__2': '', 'ciudad__2': '', 'tenant_id__2': 1, 'activo__2': True, 'rut__2': 'SinRut', 'data_json__2': '{"cliente_id": "96150", "cliente_rut": "SinRut", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "cliente_conta ... (1197 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "0", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__3': '', 'nombre__3': ' ', 'telefono__3': '', 'email__3': '', 'giro__3': '', 'obuma_id__3': '96157', 'comuna__3': '', 'ciudad__3': '', 'tenant_id__3': 1, 'activo__3': True, 'rut__3': 'SinRut', 'data_json__3': '{"cliente_id": "96157", "cliente_rut": "SinRut", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "cliente_conta ... (1197 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "0", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__4': '', 'nombre__4': ' ' ... 11888 parameters truncated ... 'rut__994': '12.368.047-2', 'data_json__994': '{"cliente_id": "100654", "cliente_rut": "12.368.047-2", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "client ... (1243 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "1", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__995': 'Camino El Oliveto 3136', 'nombre__995': 'claudia velastegui', 'telefono__995': '', 'email__995': '', 'giro__995': '', 'obuma_id__995': '144120', 'comuna__995': '', 'ciudad__995': '', 'tenant_id__995': 1, 'activo__995': True, 'rut__995': '10.373.615-3', 'data_json__995': '{"cliente_id": "144120", "cliente_rut": "10.373.615-3", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "client ... (1268 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "1", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__996': 'Osvaldo Muñoz 154', 'nombre__996': 'Claudia Veronica Cardenas Gonzalez', 'telefono__996': '', 'email__996': '', 'giro__996': '', 'obuma_id__996': '117356', 'comuna__996': '', 'ciudad__996': '', 'tenant_id__996': 1, 'activo__996': True, 'rut__996': '9.543.332-4', 'data_json__996': '{"cliente_id": "117356", "cliente_rut": "9.543.332-4", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "cliente ... (1267 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "1", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__997': 'Silvina Hurtado 1631', 'nombre__997': 'claudiaschindlerm claudiaschindlerm', 'telefono__997': '', 'email__997': '', 'giro__997': '', 'obuma_id__997': '119044', 'comuna__997': '', 'ciudad__997': '', 'tenant_id__997': 1, 'activo__997': True, 'rut__997': '9.382.447-4', 'data_json__997': '{"cliente_id": "119044", "cliente_rut": "9.382.447-4", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "cliente ... (1284 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "1", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}', 'direccion__998': 'Urbano López 11', 'nombre__998': 'Claudio Perez', 'telefono__998': '', 'email__998': '', 'giro__998': '', 'obuma_id__998': '122703', 'comuna__998': '', 'ciudad__998': '', 'tenant_id__998': 1, 'activo__998': True, 'rut__998': '17.377.604-7', 'data_json__998': '{"cliente_id": "122703", "cliente_rut": "17.377.604-7", "cliente_codigo_interno": "", "cliente_extranjero": "0", "cliente_extranjero_id": "", "client ... (1254 characters truncated) ... "cliente_geo_lng": "", "cliente_activo": "1", "rel_listaprecio_id": "0", "rel_tipocliente_id": "0", "rel_usuario_id": "0", "rel_empresa_id": "2546"}'}] (Background on this error at: https://sqlalche.me/e/20/gkpj)
+Traceback:
+File "/home/runner/workspace/src/dashboard/app.py", line 1200, in <module>
+    results = run_async(service.sync_all())
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/src/dashboard/app.py", line 233, in run_async
+    return loop.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/nix/store/6334pjf6w2q623rgvwi499qaiym1p6yv-python3-3.11.14/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+File "/home/runner/workspace/src/etl/sync_service.py", line 967, in sync_all
+    results["clientes"] = await self.sync_clientes()
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/src/etl/sync_service.py", line 209, in sync_clientes
+    self.db.commit()
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 2030, in commit
+    trans.commit(_to_root=True)
+File "<string>", line 2, in commit
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 1311, in commit
+    self._prepare_impl()
+File "<string>", line 2, in _prepare_impl
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+                ^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 1286, in _prepare_impl
+    self.session.flush()
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 4331, in flush
+    self._flush(objects)
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 4466, in _flush
+    with util.safe_reraise():
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/util/langhelpers.py", line 224, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 4427, in _flush
+    flush_context.execute()
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/unitofwork.py", line 466, in execute
+    rec.execute(self)
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/persistence.py", line 93, in save_obj
+    _emit_insert_statements(
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/orm/persistence.py", line 1143, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1419, in execute
+    return meth(
+           ^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/sql/elements.py", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1844, in _execute_context
+    return self._exec_insertmany_context(dialect, context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 2133, in _exec_insertmany_context
+    self._handle_dbapi_exception(
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 2363, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 2125, in _exec_insertmany_context
+    dialect.do_execute(
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
