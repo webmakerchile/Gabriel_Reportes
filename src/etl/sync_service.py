@@ -145,7 +145,10 @@ class SyncService:
         count = 0
         for item in items:
             rut = item.get("cliente_rut", "")
-            if not rut or rut == "0":
+            obuma_id = self._safe_str(item.get("cliente_id", item.get("id", "")))
+            if not rut or rut == "0" or rut.lower() == "sinrut":
+                rut = f"OBU-{obuma_id}" if obuma_id else None
+            if not rut:
                 continue
 
             existing = self.db.query(ClienteFinal).filter(
@@ -160,7 +163,6 @@ class SyncService:
             giro = item.get("cliente_giro", "")
             comuna = item.get("cliente_comuna", "")
             ciudad = item.get("cliente_ciudad", "")
-            obuma_id = self._safe_str(item.get("cliente_id", item.get("id", "")))
 
             if existing:
                 existing.nombre = nombre or existing.nombre
