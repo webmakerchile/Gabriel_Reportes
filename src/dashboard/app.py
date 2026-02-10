@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
-from sqlalchemy import func
+from sqlalchemy import func, extract, distinct
 import os
 import sys
 import asyncio
@@ -24,14 +24,6 @@ from src.etl.obuma_client import ObumaClient
 from src.reports.excel_generator import generate_vendedor_report, generate_all_vendedor_reports
 
 Base.metadata.create_all(bind=engine)
-
-from sqlalchemy import inspect, text
-_inspector = inspect(engine)
-_columns = [c['name'] for c in _inspector.get_columns('ventas_historico')]
-if 'vendedor_id' not in _columns:
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE ventas_historico ADD COLUMN vendedor_id VARCHAR(50)"))
-        conn.commit()
 
 st.set_page_config(
     page_title="BI Platform - Gabriel Hoyos",
@@ -122,6 +114,11 @@ st.markdown(f"""
     .metric-icon {{
         font-size: 1.5rem;
         margin-bottom: 0.3rem;
+    }}
+    .metric-delta {{
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-top: 0.3rem;
     }}
 
     .section-header {{
@@ -249,12 +246,17 @@ def format_clp(value):
     return f"${value:,.0f}".replace(",", ".")
 
 
-def render_metric(label, value, icon="", color=TEXT_PRIMARY):
+def render_metric(label, value, icon="", color=TEXT_PRIMARY, delta=None, delta_color=None):
+    delta_html = ""
+    if delta is not None:
+        dc = delta_color or (ACCENT_GREEN if str(delta).startswith("+") or (isinstance(delta, (int, float)) and delta > 0) else ACCENT_RED)
+        delta_html = f'<p class="metric-delta" style="color:{dc};">{delta}</p>'
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-icon">{icon}</div>
         <p class="metric-label">{label}</p>
         <p class="metric-value" style="color:{color};">{value}</p>
+        {delta_html}
     </div>
     """, unsafe_allow_html=True)
 
@@ -271,6 +273,11 @@ def chart_layout(height=340):
         xaxis=dict(showgrid=False, color=TEXT_SECONDARY),
         yaxis=dict(showgrid=True, gridcolor="rgba(45,53,72,0.5)", color=TEXT_SECONDARY),
     )
+
+
+MONTH_LABELS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+CHART_COLORS = [ACCENT_BLUE, ACCENT_GREEN, ACCENT_AMBER, ACCENT_RED, ACCENT_PURPLE,
+                "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#6366f1"]
 
 
 st.sidebar.markdown("### 📊 BI Platform")
@@ -296,23 +303,60 @@ st.sidebar.caption("v2.0 | Powered by Obuma ERP")
 # ============================================================
 if page == "Dashboard":
     st.markdown('<p class="page-title">Centro de Mando</p>', unsafe_allow_html=True)
-    st.markdown('<p class="page-subtitle">Vista consolidada del rendimiento de todas las cuentas</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-subtitle">Vista consolidada del rendimiento empresarial</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
-        total_ventas = db.query(func.sum(VentaHistorico.total)).scalar() or 0
-        total_compras = db.query(func.sum(CompraHistorico.total)).scalar() or 0
-        total_margen = db.query(func.sum(VentaHistorico.margen_neto)).scalar() or 0
+        st.markdown('<p class="section-header">Filtros Globales</p>', unsafe_allow_html=True)
+        fc1, fc2, fc3 = st.columns([2, 2, 3])
+        with fc1:
+            dash_date_from = st.date_input("Desde", value=date.today() - timedelta(days=365), key="dash_from")
+        with fc2:
+            dash_date_to = st.date_input("Hasta", value=date.today(), key="dash_to")
+        with fc3:
+            empleados_list = db.query(Empleado).filter(Empleado.activo == True).order_by(Empleado.nombre).all()
+            vendedor_names = {e.obuma_id: e.nombre for e in empleados_list}
+            vendedor_options_all = ["Todos"] + [f"{e.nombre} ({e.cargo or 'Sin cargo'})" for e in empleados_list]
+            vendedor_sel_dash = st.multiselect("Vendedores", vendedor_options_all, default=["Todos"], key="dash_vend")
+
+        selected_vendedor_ids = []
+        if "Todos" not in vendedor_sel_dash and vendedor_sel_dash:
+            for sel in vendedor_sel_dash:
+                for e in empleados_list:
+                    if f"{e.nombre} ({e.cargo or 'Sin cargo'})" == sel:
+                        selected_vendedor_ids.append(e.obuma_id)
+
+        def apply_dash_filters(query, model=VentaHistorico):
+            if dash_date_from:
+                query = query.filter(func.date(model.fecha) >= dash_date_from)
+            if dash_date_to:
+                query = query.filter(func.date(model.fecha) <= dash_date_to)
+            if selected_vendedor_ids and model == VentaHistorico:
+                query = query.filter(model.vendedor_id.in_(selected_vendedor_ids))
+            return query
+
+        st.markdown("---")
+
+        base_ventas_q = apply_dash_filters(db.query(VentaHistorico))
+        total_ventas = base_ventas_q.with_entities(func.sum(VentaHistorico.total)).scalar() or 0
+        total_margen = base_ventas_q.with_entities(func.sum(VentaHistorico.margen_neto)).scalar() or 0
+        n_ventas = base_ventas_q.count()
+        ventas_anuladas = apply_dash_filters(db.query(VentaHistorico).filter(VentaHistorico.anulada == True)).count()
+        total_pagado = base_ventas_q.with_entities(func.sum(VentaHistorico.total_pagado)).scalar() or 0
+        total_por_pagar = base_ventas_q.with_entities(func.sum(VentaHistorico.total_por_pagar)).scalar() or 0
+
+        compras_q = db.query(func.sum(CompraHistorico.total))
+        if dash_date_from:
+            compras_q = compras_q.filter(func.date(CompraHistorico.fecha) >= dash_date_from)
+        if dash_date_to:
+            compras_q = compras_q.filter(func.date(CompraHistorico.fecha) <= dash_date_to)
+        total_compras = compras_q.scalar() or 0
+
         n_clientes = db.query(ClienteFinal).filter(ClienteFinal.activo == True).count()
         n_productos = db.query(Producto).filter(Producto.activo == True).count()
-        n_proveedores = db.query(Proveedor).filter(Proveedor.activo == True).count()
-        n_empleados = db.query(Empleado).filter(Empleado.activo == True).count()
-        n_ventas = db.query(VentaHistorico).count()
-        ventas_anuladas = db.query(VentaHistorico).filter(VentaHistorico.anulada == True).count()
-        ventas_vigentes = n_ventas - ventas_anuladas
-        total_pagado = db.query(func.sum(VentaHistorico.total_pagado)).scalar() or 0
-        total_por_pagar = db.query(func.sum(VentaHistorico.total_por_pagar)).scalar() or 0
         margen_pct = (total_margen / total_ventas * 100) if total_ventas else 0
+
+        total_cobros_count = base_ventas_q.with_entities(func.count(VentaHistorico.id)).filter(VentaHistorico.total_pagado > 0).scalar() or 0
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -328,135 +372,316 @@ if page == "Dashboard":
 
         c5, c6, c7, c8 = st.columns(4)
         with c5:
-            render_metric("Clientes", str(n_clientes), "👥")
+            render_metric("Clientes Activos", str(n_clientes), "👥")
         with c6:
             render_metric("Documentos", str(n_ventas), "📄")
         with c7:
-            render_metric("Empleados", str(n_empleados), "👷")
+            render_metric("Productos", str(n_productos), "📦")
         with c8:
-            render_metric("Proveedores", str(n_proveedores), "🏭")
-
-        if total_pagado or total_por_pagar:
-            st.markdown("")
-            cp1, cp2, cp3, cp4 = st.columns(4)
-            with cp1:
-                render_metric("Pagado", format_clp(total_pagado), "✅", ACCENT_GREEN)
-            with cp2:
-                render_metric("Por Pagar", format_clp(total_por_pagar), "⏳", ACCENT_RED)
-            with cp3:
-                render_metric("Productos", str(n_productos), "📦")
-            with cp4:
-                render_metric("Vigentes / Anuladas", f"{ventas_vigentes} / {ventas_anuladas}", "📋")
+            render_metric("Cobros", str(total_cobros_count), "🧾")
 
         st.markdown("---")
-        col_left, col_right = st.columns(2)
 
-        with col_left:
-            st.markdown('<p class="section-header">Ventas por Fecha</p>', unsafe_allow_html=True)
-            ventas_data = db.query(
-                func.date(VentaHistorico.fecha).label("fecha"),
-                func.sum(VentaHistorico.total).label("total"),
-                func.sum(VentaHistorico.margen_neto).label("margen"),
-                func.count(VentaHistorico.id).label("cantidad")
-            ).filter(VentaHistorico.fecha.isnot(None)).group_by(
-                func.date(VentaHistorico.fecha)
-            ).order_by(func.date(VentaHistorico.fecha)).all()
+        col_chart1, col_chart2 = st.columns(2)
 
-            if ventas_data:
-                df_ventas = pd.DataFrame([
-                    {"Fecha": str(v.fecha), "Ventas": v.total or 0, "Margen": v.margen or 0}
-                    for v in ventas_data
-                ])
+        with col_chart1:
+            st.markdown('<p class="section-header">Ventas Mensuales</p>', unsafe_allow_html=True)
+            monthly_sales = apply_dash_filters(
+                db.query(
+                    extract('year', VentaHistorico.fecha).label("anio"),
+                    extract('month', VentaHistorico.fecha).label("mes"),
+                    func.sum(VentaHistorico.total).label("total")
+                ).filter(VentaHistorico.fecha.isnot(None))
+            ).group_by("anio", "mes").order_by("anio", "mes").all()
+
+            if monthly_sales:
+                df_ms = pd.DataFrame([{
+                    "Periodo": f"{int(r.anio)}-{int(r.mes):02d}",
+                    "Mes": MONTH_LABELS[int(r.mes) - 1] + f" {int(r.anio)}",
+                    "Total": r.total or 0
+                } for r in monthly_sales])
                 fig = go.Figure()
-                fig.add_trace(go.Bar(x=df_ventas["Fecha"], y=df_ventas["Ventas"],
-                                     name="Ventas", marker_color=ACCENT_BLUE))
-                fig.add_trace(go.Bar(x=df_ventas["Fecha"], y=df_ventas["Margen"],
-                                     name="Margen", marker_color=ACCENT_GREEN))
-                fig.update_layout(barmode="group", **chart_layout())
+                fig.add_trace(go.Bar(x=df_ms["Mes"], y=df_ms["Total"], name="Ventas",
+                                     marker_color=ACCENT_BLUE, opacity=0.85))
+                if len(df_ms) > 2:
+                    fig.add_trace(go.Scatter(x=df_ms["Mes"], y=df_ms["Total"].rolling(3, min_periods=1).mean(),
+                                             mode="lines", name="Tendencia",
+                                             line=dict(color=ACCENT_AMBER, width=2.5, dash="dot")))
+                fig.update_layout(**chart_layout())
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("Sin datos de ventas. Sincronice con Obuma primero.")
+                st.info("Sin datos de ventas para el rango seleccionado.")
 
-        with col_right:
-            st.markdown('<p class="section-header">Ingresos vs Egresos</p>', unsafe_allow_html=True)
-            contab_data = db.query(
-                func.date(ContabilidadHistorico.fecha).label("fecha"),
-                func.sum(ContabilidadHistorico.haber).label("ingresos"),
-                func.sum(ContabilidadHistorico.debe).label("egresos")
-            ).filter(ContabilidadHistorico.fecha.isnot(None)).group_by(
-                func.date(ContabilidadHistorico.fecha)
-            ).order_by(func.date(ContabilidadHistorico.fecha)).all()
+        with col_chart2:
+            st.markdown('<p class="section-header">Top 10 Vendedores</p>', unsafe_allow_html=True)
+            top_vend = apply_dash_filters(
+                db.query(
+                    VentaHistorico.vendedor_id,
+                    func.sum(VentaHistorico.total).label("total")
+                ).filter(VentaHistorico.vendedor_id.isnot(None), VentaHistorico.fecha.isnot(None))
+            ).group_by(VentaHistorico.vendedor_id).order_by(func.sum(VentaHistorico.total).desc()).limit(10).all()
 
-            if contab_data:
-                df_contab = pd.DataFrame([
-                    {"Fecha": str(c.fecha), "Ingresos": c.ingresos or 0, "Egresos": c.egresos or 0}
-                    for c in contab_data
-                ])
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(x=df_contab["Fecha"], y=df_contab["Ingresos"],
-                                          mode="lines+markers", name="Ingresos",
-                                          line=dict(color=ACCENT_GREEN, width=2.5),
-                                          marker=dict(size=6)))
-                fig2.add_trace(go.Scatter(x=df_contab["Fecha"], y=df_contab["Egresos"],
-                                          mode="lines+markers", name="Egresos",
-                                          line=dict(color=ACCENT_RED, width=2.5),
-                                          marker=dict(size=6)))
-                fig2.update_layout(**chart_layout())
+            if top_vend:
+                df_tv = pd.DataFrame([{
+                    "Vendedor": vendedor_names.get(v.vendedor_id, v.vendedor_id or "Desconocido"),
+                    "Total": v.total or 0
+                } for v in top_vend])
+                fig2 = go.Figure(go.Bar(
+                    x=df_tv["Total"], y=df_tv["Vendedor"], orientation='h',
+                    marker_color=ACCENT_GREEN, text=df_tv["Total"].apply(lambda x: format_clp(x)),
+                    textposition="auto"
+                ))
+                fig2.update_layout(**chart_layout(height=380))
+                fig2.update_layout(yaxis=dict(autorange="reversed", showgrid=False))
                 st.plotly_chart(fig2, use_container_width=True)
             else:
-                st.info("Sin datos de contabilidad. Sincronice con Obuma primero.")
+                st.info("Sin datos de vendedores.")
+
+        st.markdown("")
+        col_chart3, col_chart4 = st.columns(2)
+
+        with col_chart3:
+            st.markdown('<p class="section-header">Segmentacion ABC de Clientes</p>', unsafe_allow_html=True)
+            client_sales = apply_dash_filters(
+                db.query(
+                    VentaHistorico.cliente_id,
+                    func.sum(VentaHistorico.total).label("total")
+                ).filter(VentaHistorico.cliente_id.isnot(None), VentaHistorico.fecha.isnot(None))
+            ).group_by(VentaHistorico.cliente_id).order_by(func.sum(VentaHistorico.total).desc()).all()
+
+            if client_sales:
+                grand_total_abc = sum(c.total or 0 for c in client_sales)
+                segments = {"A": 0, "B": 0, "C": 0, "D": 0}
+                cumulative = 0
+                for c in client_sales:
+                    val = c.total or 0
+                    cumulative += val
+                    pct = cumulative / grand_total_abc if grand_total_abc else 0
+                    if pct <= 0.80:
+                        segments["A"] += val
+                    elif pct <= 0.95:
+                        segments["B"] += val
+                    elif pct <= 0.99:
+                        segments["C"] += val
+                    else:
+                        segments["D"] += val
+
+                df_abc = pd.DataFrame([{"Segmento": k, "Total": v} for k, v in segments.items() if v > 0])
+                abc_colors = {"A": ACCENT_GREEN, "B": ACCENT_BLUE, "C": ACCENT_AMBER, "D": ACCENT_RED}
+                fig3 = go.Figure(go.Pie(
+                    labels=df_abc["Segmento"], values=df_abc["Total"],
+                    hole=0.45, marker=dict(colors=[abc_colors.get(s, ACCENT_BLUE) for s in df_abc["Segmento"]]),
+                    textinfo="label+percent", textfont=dict(color="white")
+                ))
+                fig3.update_layout(**chart_layout())
+                st.plotly_chart(fig3, use_container_width=True)
+            else:
+                st.info("Sin datos de clientes para segmentacion.")
+
+        with col_chart4:
+            st.markdown('<p class="section-header">Rentabilidad por Vendedor</p>', unsafe_allow_html=True)
+            rent_vend = apply_dash_filters(
+                db.query(
+                    VentaHistorico.vendedor_id,
+                    func.sum(VentaHistorico.margen_neto).label("margen")
+                ).filter(VentaHistorico.vendedor_id.isnot(None), VentaHistorico.fecha.isnot(None))
+            ).group_by(VentaHistorico.vendedor_id).order_by(func.sum(VentaHistorico.margen_neto).desc()).limit(10).all()
+
+            if rent_vend:
+                df_rv = pd.DataFrame([{
+                    "Vendedor": vendedor_names.get(v.vendedor_id, v.vendedor_id or "Desconocido"),
+                    "Margen": v.margen or 0
+                } for v in rent_vend])
+                colors_rv = [ACCENT_GREEN if m >= 0 else ACCENT_RED for m in df_rv["Margen"]]
+                fig4 = go.Figure(go.Bar(
+                    x=df_rv["Vendedor"], y=df_rv["Margen"],
+                    marker_color=colors_rv,
+                    text=df_rv["Margen"].apply(lambda x: format_clp(x)),
+                    textposition="auto"
+                ))
+                fig4.update_layout(**chart_layout())
+                st.plotly_chart(fig4, use_container_width=True)
+            else:
+                st.info("Sin datos de rentabilidad.")
+
+        st.markdown("")
+        col_chart5, col_chart6 = st.columns(2)
+
+        with col_chart5:
+            st.markdown('<p class="section-header">Estado de Cobranza</p>', unsafe_allow_html=True)
+            if total_pagado or total_por_pagar:
+                fig5 = go.Figure(go.Pie(
+                    labels=["Pagado", "Por Pagar"],
+                    values=[total_pagado, total_por_pagar],
+                    hole=0.5,
+                    marker=dict(colors=[ACCENT_GREEN, ACCENT_RED]),
+                    textinfo="label+percent+value",
+                    textfont=dict(color="white"),
+                    texttemplate="%{label}<br>%{percent}<br>$%{value:,.0f}"
+                ))
+                fig5.update_layout(**chart_layout())
+                st.plotly_chart(fig5, use_container_width=True)
+            else:
+                st.info("Sin datos de cobranza.")
+
+        with col_chart6:
+            st.markdown('<p class="section-header">Top 15 Productos Vendidos</p>', unsafe_allow_html=True)
+            top_products_q = db.query(
+                VentaItem.producto_nombre,
+                func.sum(VentaItem.cantidad).label("cantidad"),
+                func.sum(VentaItem.total).label("total")
+            ).join(VentaHistorico, VentaHistorico.id == VentaItem.venta_id
+            ).filter(VentaItem.producto_nombre.isnot(None))
+            top_products_q = apply_dash_filters(top_products_q, VentaHistorico)
+            top_products = top_products_q.group_by(VentaItem.producto_nombre
+            ).order_by(func.sum(VentaItem.total).desc()).limit(15).all()
+
+            if top_products:
+                df_tp = pd.DataFrame([{
+                    "Producto": (p.producto_nombre or "")[:30],
+                    "Total": p.total or 0
+                } for p in top_products])
+                fig6 = go.Figure(go.Bar(
+                    x=df_tp["Total"], y=df_tp["Producto"], orientation='h',
+                    marker_color=ACCENT_PURPLE,
+                    text=df_tp["Total"].apply(lambda x: format_clp(x)),
+                    textposition="auto"
+                ))
+                fig6.update_layout(**chart_layout(height=420))
+                fig6.update_layout(yaxis=dict(autorange="reversed", showgrid=False))
+                st.plotly_chart(fig6, use_container_width=True)
+            else:
+                st.info("Sin datos de productos vendidos.")
+
+        st.markdown("")
+        col_chart7, col_chart8 = st.columns(2)
+
+        with col_chart7:
+            st.markdown('<p class="section-header">Evolucion Ventas vs Compras</p>', unsafe_allow_html=True)
+            monthly_ventas = apply_dash_filters(
+                db.query(
+                    extract('year', VentaHistorico.fecha).label("anio"),
+                    extract('month', VentaHistorico.fecha).label("mes"),
+                    func.sum(VentaHistorico.total).label("total")
+                ).filter(VentaHistorico.fecha.isnot(None))
+            ).group_by("anio", "mes").order_by("anio", "mes").all()
+
+            compras_q_monthly = db.query(
+                extract('year', CompraHistorico.fecha).label("anio"),
+                extract('month', CompraHistorico.fecha).label("mes"),
+                func.sum(CompraHistorico.total).label("total")
+            ).filter(CompraHistorico.fecha.isnot(None))
+            if dash_date_from:
+                compras_q_monthly = compras_q_monthly.filter(func.date(CompraHistorico.fecha) >= dash_date_from)
+            if dash_date_to:
+                compras_q_monthly = compras_q_monthly.filter(func.date(CompraHistorico.fecha) <= dash_date_to)
+            monthly_compras = compras_q_monthly.group_by("anio", "mes").order_by("anio", "mes").all()
+
+            if monthly_ventas or monthly_compras:
+                all_periods = set()
+                ventas_map = {}
+                compras_map = {}
+                for r in monthly_ventas:
+                    key = f"{int(r.anio)}-{int(r.mes):02d}"
+                    all_periods.add(key)
+                    ventas_map[key] = r.total or 0
+                for r in monthly_compras:
+                    key = f"{int(r.anio)}-{int(r.mes):02d}"
+                    all_periods.add(key)
+                    compras_map[key] = r.total or 0
+
+                sorted_periods = sorted(all_periods)
+                labels = [MONTH_LABELS[int(p.split("-")[1]) - 1] + f" {p.split('-')[0]}" for p in sorted_periods]
+
+                fig7 = go.Figure()
+                fig7.add_trace(go.Scatter(
+                    x=labels, y=[ventas_map.get(p, 0) for p in sorted_periods],
+                    mode="lines+markers", name="Ventas",
+                    line=dict(color=ACCENT_GREEN, width=2.5), marker=dict(size=6)
+                ))
+                fig7.add_trace(go.Scatter(
+                    x=labels, y=[compras_map.get(p, 0) for p in sorted_periods],
+                    mode="lines+markers", name="Compras",
+                    line=dict(color=ACCENT_RED, width=2.5), marker=dict(size=6)
+                ))
+                fig7.update_layout(**chart_layout())
+                st.plotly_chart(fig7, use_container_width=True)
+            else:
+                st.info("Sin datos para comparacion ventas vs compras.")
+
+        with col_chart8:
+            st.markdown('<p class="section-header">Distribucion por Tipo Documento</p>', unsafe_allow_html=True)
+            doc_types = apply_dash_filters(
+                db.query(
+                    VentaHistorico.tipo_documento,
+                    func.count(VentaHistorico.id).label("cantidad"),
+                    func.sum(VentaHistorico.total).label("total")
+                ).filter(VentaHistorico.tipo_documento.isnot(None), VentaHistorico.fecha.isnot(None))
+            ).group_by(VentaHistorico.tipo_documento).order_by(func.sum(VentaHistorico.total).desc()).all()
+
+            if doc_types:
+                df_dt = pd.DataFrame([{
+                    "Tipo": d.tipo_documento or "Otro",
+                    "Total": d.total or 0,
+                    "Cantidad": d.cantidad or 0
+                } for d in doc_types])
+                fig8 = go.Figure(go.Pie(
+                    labels=df_dt["Tipo"], values=df_dt["Total"],
+                    hole=0.4, marker=dict(colors=CHART_COLORS[:len(df_dt)]),
+                    textinfo="label+percent", textfont=dict(color="white")
+                ))
+                fig8.update_layout(**chart_layout())
+                st.plotly_chart(fig8, use_container_width=True)
+            else:
+                st.info("Sin datos de tipos de documento.")
 
         st.markdown("---")
         col_tbl1, col_tbl2 = st.columns(2)
 
         with col_tbl1:
             st.markdown('<p class="section-header">Ultimas Transacciones</p>', unsafe_allow_html=True)
-            recent_ventas = db.query(VentaHistorico).order_by(VentaHistorico.fecha.desc()).limit(10).all()
+            recent_q = apply_dash_filters(db.query(VentaHistorico).filter(VentaHistorico.fecha.isnot(None)))
+            recent_ventas = recent_q.order_by(VentaHistorico.fecha.desc()).limit(15).all()
             if recent_ventas:
                 data = []
                 for v in recent_ventas:
-                    cliente_nombre = ""
-                    if v.cliente_id:
-                        cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
-                        cliente_nombre = cliente.nombre if cliente else ""
+                    vend_name = vendedor_names.get(v.vendedor_id, "-") if v.vendedor_id else "-"
                     data.append({
                         "Fecha": str(v.fecha)[:10] if v.fecha else "-",
+                        "Tipo": v.tipo_documento or "-",
                         "Folio": v.folio or "-",
                         "Total": format_clp(v.total),
+                        "Vendedor": vend_name,
                         "Estado": "Anulada" if v.anulada else "Vigente",
                     })
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
             else:
                 st.info("Sin transacciones recientes.")
 
         with col_tbl2:
-            st.markdown('<p class="section-header">Top Clientes</p>', unsafe_allow_html=True)
-            top_clientes = db.query(
+            st.markdown('<p class="section-header">Top Clientes por Ingresos</p>', unsafe_allow_html=True)
+            top_clientes_q = db.query(
                 ClienteFinal.nombre,
                 ClienteFinal.rut,
                 func.sum(VentaHistorico.total).label("total"),
+                func.sum(VentaHistorico.margen_neto).label("margen"),
                 func.count(VentaHistorico.id).label("transacciones")
             ).join(VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
-            ).group_by(ClienteFinal.nombre, ClienteFinal.rut
-            ).order_by(func.sum(VentaHistorico.total).desc()).limit(10).all()
+            ).filter(VentaHistorico.fecha.isnot(None))
+            top_clientes_q = apply_dash_filters(top_clientes_q, VentaHistorico)
+            top_clientes = top_clientes_q.group_by(
+                ClienteFinal.nombre, ClienteFinal.rut
+            ).order_by(func.sum(VentaHistorico.total).desc()).limit(15).all()
 
             if top_clientes:
-                df_top = pd.DataFrame([
-                    {"Cliente": c.nombre, "RUT": c.rut or "-",
-                     "Total": format_clp(c.total), "Docs": c.transacciones}
-                    for c in top_clientes
-                ])
-                st.dataframe(df_top, use_container_width=True, hide_index=True)
+                df_top = pd.DataFrame([{
+                    "Cliente": c.nombre, "RUT": c.rut or "-",
+                    "Total": format_clp(c.total), "Margen": format_clp(c.margen),
+                    "Docs": c.transacciones
+                } for c in top_clientes])
+                st.dataframe(df_top, use_container_width=True, hide_index=True, height=400)
             else:
-                clientes_list = db.query(ClienteFinal).filter(ClienteFinal.activo == True).all()
-                if clientes_list:
-                    df_cl = pd.DataFrame([
-                        {"Cliente": c.nombre, "RUT": c.rut or "-", "Email": c.email or "-"}
-                        for c in clientes_list
-                    ])
-                    st.dataframe(df_cl, use_container_width=True, hide_index=True)
-                else:
-                    st.info("Sin datos de clientes.")
+                st.info("Sin datos de clientes.")
     finally:
         db.close()
 
@@ -475,13 +700,19 @@ elif page == "Ventas":
         ])
 
         with tab_docs:
-            col1, col2, col3 = st.columns(3)
+            empleados_v = db.query(Empleado).filter(Empleado.activo == True).order_by(Empleado.nombre).all()
+            vend_map_v = {e.obuma_id: e.nombre for e in empleados_v}
+
+            col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
             with col1:
                 fecha_desde = st.date_input("Desde", value=date.today() - timedelta(days=365), key="vd1")
             with col2:
                 fecha_hasta = st.date_input("Hasta", value=date.today(), key="vd2")
             with col3:
                 filtro_estado = st.selectbox("Estado", ["Todos", "Vigentes", "Anuladas"])
+            with col4:
+                vend_options_v = ["Todos"] + [e.nombre for e in empleados_v]
+                filtro_vendedor = st.selectbox("Vendedor", vend_options_v, key="vd_vend")
 
             query = db.query(VentaHistorico)
             if fecha_desde:
@@ -492,6 +723,10 @@ elif page == "Ventas":
                 query = query.filter(VentaHistorico.anulada == False)
             elif filtro_estado == "Anuladas":
                 query = query.filter(VentaHistorico.anulada == True)
+            if filtro_vendedor != "Todos":
+                sel_emp = next((e for e in empleados_v if e.nombre == filtro_vendedor), None)
+                if sel_emp:
+                    query = query.filter(VentaHistorico.vendedor_id == sel_emp.obuma_id)
 
             ventas = query.order_by(VentaHistorico.fecha.desc()).all()
 
@@ -511,6 +746,38 @@ elif page == "Ventas":
                     render_metric("Margen", format_clp(total_margen), "📈", ACCENT_PURPLE)
 
                 st.markdown("")
+
+                col_vc1, col_vc2 = st.columns(2)
+                with col_vc1:
+                    st.markdown('<p class="section-header">Ventas Mensuales</p>', unsafe_allow_html=True)
+                    df_v_all = pd.DataFrame([{
+                        "fecha": v.fecha,
+                        "total": v.total or 0,
+                        "mes": v.fecha.month if v.fecha else None,
+                        "anio": v.fecha.year if v.fecha else None
+                    } for v in ventas if v.fecha])
+                    if not df_v_all.empty:
+                        monthly = df_v_all.groupby(["anio", "mes"])["total"].sum().reset_index()
+                        monthly["label"] = monthly.apply(lambda r: f"{MONTH_LABELS[int(r['mes'])-1]} {int(r['anio'])}", axis=1)
+                        fig_vm = go.Figure(go.Bar(x=monthly["label"], y=monthly["total"],
+                                                   marker_color=ACCENT_BLUE))
+                        fig_vm.update_layout(**chart_layout())
+                        st.plotly_chart(fig_vm, use_container_width=True)
+
+                with col_vc2:
+                    st.markdown('<p class="section-header">Tipo de Documento</p>', unsafe_allow_html=True)
+                    df_tipos = pd.DataFrame([{"tipo": v.tipo_documento or "Otro", "total": v.total or 0} for v in ventas])
+                    if not df_tipos.empty:
+                        tipos_agg = df_tipos.groupby("tipo")["total"].sum().reset_index()
+                        fig_tp = go.Figure(go.Pie(
+                            labels=tipos_agg["tipo"], values=tipos_agg["total"],
+                            hole=0.4, marker=dict(colors=CHART_COLORS[:len(tipos_agg)]),
+                            textinfo="label+percent", textfont=dict(color="white")
+                        ))
+                        fig_tp.update_layout(**chart_layout())
+                        st.plotly_chart(fig_tp, use_container_width=True)
+
+                st.markdown("")
                 data = []
                 for v in ventas:
                     data.append({
@@ -522,6 +789,7 @@ elif page == "Ventas":
                         "Total": format_clp(v.total),
                         "Costo": format_clp(v.costo_total),
                         "Margen": format_clp(v.margen_neto),
+                        "Vendedor": vend_map_v.get(v.vendedor_id, "-") if v.vendedor_id else "-",
                         "Estado": "Anulada" if v.anulada else "Vigente",
                     })
                 st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
@@ -602,7 +870,7 @@ elif page == "Ventas":
 # ============================================================
 elif page == "Clientes":
     st.markdown('<p class="page-title">Gestion de Clientes</p>', unsafe_allow_html=True)
-    st.markdown('<p class="page-subtitle">Clientes, contactos y direcciones desde Obuma ERP</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-subtitle">Clientes, contactos, direcciones y analisis de actividad</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
@@ -611,9 +879,71 @@ elif page == "Clientes":
         ])
 
         with tab_clientes:
-            clientes = db.query(ClienteFinal).filter(ClienteFinal.activo == True).all()
+            fc1, fc2 = st.columns([3, 1])
+            with fc1:
+                search_term = st.text_input("Buscar por nombre o RUT", "", key="cli_search")
+            with fc2:
+                show_inactive = st.checkbox("Mostrar inactivos", value=False, key="cli_inactive")
+
+            clientes_q = db.query(ClienteFinal)
+            if not show_inactive:
+                clientes_q = clientes_q.filter(ClienteFinal.activo == True)
+            if search_term:
+                clientes_q = clientes_q.filter(
+                    (ClienteFinal.nombre.ilike(f"%{search_term}%")) |
+                    (ClienteFinal.rut.ilike(f"%{search_term}%"))
+                )
+            clientes = clientes_q.order_by(ClienteFinal.nombre).all()
+
             if clientes:
-                render_metric("Total Clientes Activos", str(len(clientes)), "👥", ACCENT_BLUE)
+                render_metric("Clientes Encontrados", str(len(clientes)), "👥", ACCENT_BLUE)
+                st.markdown("")
+
+                col_cc1, col_cc2 = st.columns(2)
+
+                with col_cc1:
+                    st.markdown('<p class="section-header">Top Clientes por Facturacion</p>', unsafe_allow_html=True)
+                    top_cl = db.query(
+                        ClienteFinal.nombre,
+                        func.sum(VentaHistorico.total).label("total")
+                    ).join(VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
+                    ).group_by(ClienteFinal.nombre
+                    ).order_by(func.sum(VentaHistorico.total).desc()).limit(10).all()
+
+                    if top_cl:
+                        df_tcl = pd.DataFrame([{"Cliente": c.nombre, "Total": c.total or 0} for c in top_cl])
+                        fig_cl = go.Figure(go.Bar(
+                            x=df_tcl["Total"], y=df_tcl["Cliente"], orientation='h',
+                            marker_color=ACCENT_BLUE,
+                            text=df_tcl["Total"].apply(lambda x: format_clp(x)),
+                            textposition="auto"
+                        ))
+                        fig_cl.update_layout(**chart_layout(height=350))
+                        fig_cl.update_layout(yaxis=dict(autorange="reversed", showgrid=False))
+                        st.plotly_chart(fig_cl, use_container_width=True)
+
+                with col_cc2:
+                    st.markdown('<p class="section-header">Actividad de Clientes (Meses con Compras)</p>', unsafe_allow_html=True)
+                    activity = db.query(
+                        ClienteFinal.nombre,
+                        func.count(distinct(extract('month', VentaHistorico.fecha))).label("meses")
+                    ).join(VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
+                    ).filter(VentaHistorico.fecha.isnot(None)
+                    ).group_by(ClienteFinal.nombre
+                    ).order_by(func.count(distinct(extract('month', VentaHistorico.fecha))).desc()).limit(10).all()
+
+                    if activity:
+                        df_act = pd.DataFrame([{"Cliente": a.nombre, "Meses": a.meses or 0} for a in activity])
+                        fig_act = go.Figure(go.Bar(
+                            x=df_act["Meses"], y=df_act["Cliente"], orientation='h',
+                            marker_color=ACCENT_GREEN,
+                            text=df_act["Meses"], textposition="auto"
+                        ))
+                        fig_act.update_layout(**chart_layout(height=350))
+                        fig_act.update_layout(yaxis=dict(autorange="reversed", showgrid=False),
+                                              xaxis=dict(title="Meses con compras"))
+                        st.plotly_chart(fig_act, use_container_width=True)
+
                 st.markdown("")
                 data = []
                 for c in clientes:
@@ -626,10 +956,11 @@ elif page == "Clientes":
                         "Telefono": c.telefono or "-",
                         "Ventas": n_ventas,
                         "Total Facturado": format_clp(total),
+                        "Activo": "Si" if c.activo else "No",
                     })
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
             else:
-                st.info("No hay clientes. Sincronice con Obuma.")
+                st.info("No hay clientes que coincidan con la busqueda.")
 
         with tab_contactos:
             contactos = db.query(ClienteContacto).all()
@@ -1110,7 +1441,6 @@ elif page == "Reportes":
 
     db = get_db()
     try:
-        from src.models.models import Empleado
         vendedores = db.query(Empleado).order_by(Empleado.nombre).all()
 
         st.markdown('<p class="section-header">Generar Reportes por Vendedor</p>', unsafe_allow_html=True)
@@ -1118,59 +1448,127 @@ elif page == "Reportes":
         tab_individual, tab_todos = st.tabs(["Reporte Individual", "Todos los Vendedores"])
 
         with tab_individual:
-            col1, col2, col3 = st.columns([3, 2, 1])
-            with col1:
-                vendedor_options = {f"{v.nombre} ({v.cargo or 'Sin cargo'})": v.obuma_id for v in vendedores}
-                vendedor_sel = st.selectbox("Seleccionar Vendedor", list(vendedor_options.keys()))
-            with col2:
-                year_report = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030)
-            with col3:
-                st.write("")
-                st.write("")
-                if st.button("Generar", type="primary", use_container_width=True, key="gen_individual"):
-                    vendedor_obuma_id = vendedor_options[vendedor_sel]
-                    with st.spinner(f"Generando reporte para {vendedor_sel}..."):
-                        try:
-                            filepath = generate_vendedor_report(db, vendedor_obuma_id, int(year_report))
-                            if filepath:
-                                st.success(f"Reporte generado: {os.path.basename(filepath)}")
-                                with open(filepath, "rb") as f:
-                                    st.download_button(
-                                        label="Descargar Reporte",
-                                        data=f.read(),
-                                        file_name=os.path.basename(filepath),
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        use_container_width=True,
-                                        key="dl_individual"
-                                    )
-                            else:
-                                st.warning("Este vendedor no tiene ventas registradas.")
-                        except Exception as e:
-                            st.error(f"Error generando reporte: {str(e)}")
+            vendedor_options = {f"{v.nombre} ({v.cargo or 'Sin cargo'})": v.obuma_id for v in vendedores}
+            vendedor_sel = st.selectbox("Seleccionar Vendedor", list(vendedor_options.keys()))
+
+            st.markdown('<p class="section-header">Rango de Fechas</p>', unsafe_allow_html=True)
+            range_mode = st.radio("Modo", ["Por Ano", "Rango Personalizado"], horizontal=True, key="rng_ind")
+
+            if range_mode == "Por Ano":
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    year_report = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="yr_ind")
+                with col2:
+                    st.write("")
+                    st.write("")
+                    if st.button("Generar", type="primary", use_container_width=True, key="gen_individual"):
+                        vendedor_obuma_id = vendedor_options[vendedor_sel]
+                        with st.spinner(f"Generando reporte para {vendedor_sel}..."):
+                            try:
+                                year_val = int(year_report)
+                                date_from_r = date(year_val, 1, 1)
+                                date_to_r = date(year_val, 12, 31)
+                                filepath = generate_vendedor_report(db, vendedor_obuma_id, date_from_r, date_to_r)
+                                if filepath:
+                                    st.success(f"Reporte generado: {os.path.basename(filepath)}")
+                                    with open(filepath, "rb") as f:
+                                        st.download_button(
+                                            label="Descargar Reporte",
+                                            data=f.read(),
+                                            file_name=os.path.basename(filepath),
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            use_container_width=True,
+                                            key="dl_individual"
+                                        )
+                                else:
+                                    st.warning("Este vendedor no tiene ventas registradas en el periodo.")
+                            except Exception as e:
+                                st.error(f"Error generando reporte: {str(e)}")
+            else:
+                col1, col2, col3 = st.columns([2, 2, 1])
+                with col1:
+                    rpt_date_from = st.date_input("Desde", value=date(date.today().year, 1, 1), key="rpt_from_ind")
+                with col2:
+                    rpt_date_to = st.date_input("Hasta", value=date.today(), key="rpt_to_ind")
+                with col3:
+                    st.write("")
+                    st.write("")
+                    if st.button("Generar", type="primary", use_container_width=True, key="gen_individual_custom"):
+                        vendedor_obuma_id = vendedor_options[vendedor_sel]
+                        with st.spinner(f"Generando reporte para {vendedor_sel}..."):
+                            try:
+                                filepath = generate_vendedor_report(db, vendedor_obuma_id, rpt_date_from, rpt_date_to)
+                                if filepath:
+                                    st.success(f"Reporte generado: {os.path.basename(filepath)}")
+                                    with open(filepath, "rb") as f:
+                                        st.download_button(
+                                            label="Descargar Reporte",
+                                            data=f.read(),
+                                            file_name=os.path.basename(filepath),
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            use_container_width=True,
+                                            key="dl_individual_custom"
+                                        )
+                                else:
+                                    st.warning("Este vendedor no tiene ventas registradas en el periodo.")
+                            except Exception as e:
+                                st.error(f"Error generando reporte: {str(e)}")
 
         with tab_todos:
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                year_all = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="year_all")
-            with col2:
-                st.write("")
-                st.write("")
-                if st.button("Generar Todos", type="primary", use_container_width=True, key="gen_all"):
-                    with st.spinner("Generando reportes para todos los vendedores..."):
-                        try:
-                            filepaths = generate_all_vendedor_reports(db, int(year_all))
-                            st.success(f"Se generaron {len(filepaths)} reportes")
-                            for fp in filepaths:
-                                with open(fp, "rb") as f:
-                                    st.download_button(
-                                        label=f"Descargar {os.path.basename(fp)}",
-                                        data=f.read(),
-                                        file_name=os.path.basename(fp),
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        key=f"dl_all_{os.path.basename(fp)}"
-                                    )
-                        except Exception as e:
-                            st.error(f"Error: {str(e)}")
+            st.markdown('<p class="section-header">Rango de Fechas</p>', unsafe_allow_html=True)
+            range_mode_all = st.radio("Modo", ["Por Ano", "Rango Personalizado"], horizontal=True, key="rng_all")
+
+            if range_mode_all == "Por Ano":
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    year_all = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="year_all")
+                with col2:
+                    st.write("")
+                    st.write("")
+                    if st.button("Generar Todos", type="primary", use_container_width=True, key="gen_all"):
+                        with st.spinner("Generando reportes para todos los vendedores..."):
+                            try:
+                                year_val_all = int(year_all)
+                                date_from_all = date(year_val_all, 1, 1)
+                                date_to_all = date(year_val_all, 12, 31)
+                                filepaths = generate_all_vendedor_reports(db, date_from_all, date_to_all)
+                                st.success(f"Se generaron {len(filepaths)} reportes")
+                                for fp in filepaths:
+                                    with open(fp, "rb") as f:
+                                        st.download_button(
+                                            label=f"Descargar {os.path.basename(fp)}",
+                                            data=f.read(),
+                                            file_name=os.path.basename(fp),
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            key=f"dl_all_{os.path.basename(fp)}"
+                                        )
+                            except Exception as e:
+                                st.error(f"Error: {str(e)}")
+            else:
+                col1, col2, col3 = st.columns([2, 2, 1])
+                with col1:
+                    rpt_date_from_all = st.date_input("Desde", value=date(date.today().year, 1, 1), key="rpt_from_all")
+                with col2:
+                    rpt_date_to_all = st.date_input("Hasta", value=date.today(), key="rpt_to_all")
+                with col3:
+                    st.write("")
+                    st.write("")
+                    if st.button("Generar Todos", type="primary", use_container_width=True, key="gen_all_custom"):
+                        with st.spinner("Generando reportes para todos los vendedores..."):
+                            try:
+                                filepaths = generate_all_vendedor_reports(db, rpt_date_from_all, rpt_date_to_all)
+                                st.success(f"Se generaron {len(filepaths)} reportes")
+                                for fp in filepaths:
+                                    with open(fp, "rb") as f:
+                                        st.download_button(
+                                            label=f"Descargar {os.path.basename(fp)}",
+                                            data=f.read(),
+                                            file_name=os.path.basename(fp),
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            key=f"dl_allc_{os.path.basename(fp)}"
+                                        )
+                            except Exception as e:
+                                st.error(f"Error: {str(e)}")
 
         st.markdown("---")
         st.markdown('<p class="section-header">Reportes Generados</p>', unsafe_allow_html=True)

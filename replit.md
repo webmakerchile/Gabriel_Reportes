@@ -107,15 +107,37 @@ reports/                    # Directorio de reportes generados
 | CRM | crm.list.json | crm_leads | OK |
 
 ## Key Features
-1. **ETL Completo**: Sincronizacion de 23 endpoints Obuma (clientes, contactos, direcciones, proveedores, productos, categorias, subcategorias, fabricantes, precios, empleados, remuneraciones, ventas, items, cotizaciones, cobros, DTE, compras, OC, pagos, contabilidad, gastos menores, CRM)
+1. **ETL Completo**: Sincronizacion de 21 endpoints Obuma activos
 2. **Tablas Historicas**: ventas_historico, costos_historico, compras_historico
 3. **Multi-Tenant**: Tabla clientes_finales con relaciones a transacciones
 4. **Calculo Margen Neto**: Cruce ventas vs costos de adquisicion
 5. **Auditoria**: Comparacion totales API vs PostgreSQL
-6. **Reportes Excel**: Generacion automatica diaria a las 23:50 Chile
-7. **Dashboard**: 8 secciones - Dashboard, Ventas, Clientes, Contabilidad, API Obuma, Reportes, Sincronizacion, Auditoria
-8. **Catalogo API**: 30 endpoints Obuma registrados con estado (sincronizado, implementado, disponible, referencia, error)
-9. **Data JSON**: Cada modelo almacena data_json con respuesta cruda completa de API para futuras automatizaciones
+6. **Reportes Excel por Vendedor**: Con rango de fechas personalizable, segmentacion ABC, nivel de riesgo, formato matching referencia Excel (yellow fills, green segmento)
+7. **Dashboard Completo**: 13 secciones con filtros globales, 8+ graficos interactivos (ventas mensuales, top vendedores, ABC segmentacion, rentabilidad, cobranza, top productos, ventas vs compras, tipos documento)
+8. **Catalogo API**: 30 endpoints Obuma registrados con estado
+9. **Data JSON**: Cada modelo almacena data_json con respuesta cruda completa de API
+10. **Scheduler Diario**: Genera reportes por vendedor automaticamente a las 23:50 Chile
+
+## Dashboard Sections (13 pages)
+- **Dashboard**: Centro de Mando con filtros globales (fecha, vendedor), 8 KPIs, 8 graficos, tablas top clientes/transacciones
+- **Ventas**: Documentos con filtro vendedor, grafico mensual, distribucion tipo documento, items, cotizaciones, cobros, DTE
+- **Clientes**: Busqueda por nombre/RUT, top clientes facturacion, actividad clientes, contactos, direcciones
+- **Proveedores**: Lista proveedores activos
+- **Productos**: Productos, categorias, subcategorias, fabricantes, precios
+- **Empleados**: Empleados y remuneraciones
+- **Compras**: Compras, ordenes de compra, pagos
+- **Contabilidad**: Libro diario, balance debe/haber
+- **CRM**: Leads y oportunidades comerciales
+- **API Obuma**: Catalogo 30 endpoints, probador en vivo
+- **Reportes**: Generacion Excel por vendedor con rango fechas personalizable (ano o rango custom)
+- **Sincronizacion**: Importacion datos Obuma, historial sync
+- **Auditoria**: Diagnostico API en vivo, resumen tablas, log sync
+
+## Report Generator (excel_generator.py)
+- `generate_vendedor_report(db, vendedor_obuma_id, date_from, date_to)` - Reporte individual
+- `generate_all_vendedor_reports(db, date_from, date_to)` - Todos los vendedores
+- Formato: Columnas A-W (N, RUT, Razon Social, Tipo, Ene-Dic, TOTAL, % Acum, Segmento, % Venta, Meses, Ult 3 meses, Riesgo)
+- Estilos: Header azul/blanco, yellow fill celdas $0, green fill segmento ABC, bordes finos
 
 ## Environment Variables
 - `DATABASE_URL` - PostgreSQL connection

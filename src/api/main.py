@@ -245,7 +245,9 @@ def generar_reporte(
 ):
     if year is None:
         year = date.today().year
-    filepaths = generate_all_vendedor_reports(db, year)
+    date_from = date(year, 1, 1)
+    date_to = date(year, 12, 31)
+    filepaths = generate_all_vendedor_reports(db, date_from, date_to)
     return {"status": "generated", "count": len(filepaths), "filepaths": filepaths}
 
 

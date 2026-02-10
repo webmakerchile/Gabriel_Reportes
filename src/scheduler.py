@@ -21,7 +21,7 @@ def scheduled_sync_and_report():
         loop.close()
         logger.info(f"Sincronización completada: {results}")
 
-        filepaths = generate_all_vendedor_reports(db, date.today().year)
+        filepaths = generate_all_vendedor_reports(db)
         logger.info(f"Reportes por vendedor generados: {len(filepaths)} archivos")
         for fp in filepaths:
             logger.info(f"  -> {fp}")
