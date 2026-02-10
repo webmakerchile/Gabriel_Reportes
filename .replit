@@ -10,7 +10,7 @@ packages = ["glibcLocales"]
 
 [userenv.shared]
 OBUMA_API_KEY = "ff5bfe7710dd17ac298f60bd469b7b9b"
-OBUMA_BASE_URL = "https://api.obuma.cl/v1.0"
+OBUMA_BASE_URL = "https://api-g1.obuma.cl/v1.0"
 TZ = "America/Santiago"
 
 [userenv.production]
