@@ -530,7 +530,7 @@ if page == "Dashboard":
                 VentaItem.producto_nombre,
                 func.sum(VentaItem.cantidad).label("cantidad"),
                 func.sum(VentaItem.total).label("total")
-            ).join(VentaHistorico, VentaHistorico.id == VentaItem.venta_id
+            ).join(VentaHistorico, VentaHistorico.obuma_id == VentaItem.venta_id_obuma
             ).filter(VentaItem.producto_nombre.isnot(None))
             top_products_q = apply_dash_filters(top_products_q, VentaHistorico)
             top_products = top_products_q.group_by(VentaItem.producto_nombre
