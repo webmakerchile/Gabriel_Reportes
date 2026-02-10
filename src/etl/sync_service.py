@@ -144,18 +144,11 @@ class SyncService:
         items = self._extract_items(data, "clientes")
         count = 0
         for item in items:
-            rut = item.get("cliente_rut", "")
             obuma_id = self._safe_str(item.get("cliente_id", item.get("id", "")))
-            if not rut or rut == "0" or rut.lower() == "sinrut":
-                rut = f"OBU-{obuma_id}" if obuma_id else None
-            if not rut:
+            if not obuma_id:
                 continue
 
-            existing = self.db.query(ClienteFinal).filter(
-                ClienteFinal.rut == rut,
-                ClienteFinal.tenant_id == self.tenant_id
-            ).first()
-
+            rut = item.get("cliente_rut", "") or ""
             nombre = item.get("cliente_razon_social", item.get("cliente_nombre_fantasia", ""))
             email = item.get("cliente_email", "")
             telefono = item.get("cliente_telefono", item.get("cliente_celular", ""))
@@ -163,6 +156,26 @@ class SyncService:
             giro = item.get("cliente_giro", "")
             comuna = item.get("cliente_comuna", "")
             ciudad = item.get("cliente_ciudad", "")
+
+            existing = self.db.query(ClienteFinal).filter(
+                ClienteFinal.obuma_id == obuma_id,
+                ClienteFinal.tenant_id == self.tenant_id
+            ).first()
+
+            if not existing and rut:
+                existing = self.db.query(ClienteFinal).filter(
+                    ClienteFinal.rut == rut,
+                    ClienteFinal.tenant_id == self.tenant_id
+                ).first()
+
+            unique_rut = rut if rut else f"OBU-{obuma_id}"
+            if not existing:
+                dup = self.db.query(ClienteFinal).filter(
+                    ClienteFinal.rut == unique_rut,
+                    ClienteFinal.tenant_id == self.tenant_id
+                ).first()
+                if dup:
+                    unique_rut = f"OBU-{obuma_id}"
 
             if existing:
                 existing.nombre = nombre or existing.nombre
@@ -172,12 +185,13 @@ class SyncService:
                 existing.giro = giro or existing.giro
                 existing.comuna = comuna or existing.comuna
                 existing.ciudad = ciudad or existing.ciudad
-                existing.obuma_id = obuma_id or existing.obuma_id
+                existing.obuma_id = obuma_id
+                existing.rut = unique_rut
                 existing.data_json = self._to_json(item)
             else:
                 cliente = ClienteFinal(
                     tenant_id=self.tenant_id,
-                    rut=rut,
+                    rut=unique_rut,
                     nombre=nombre or "Sin nombre",
                     email=email,
                     telefono=telefono,
@@ -191,7 +205,11 @@ class SyncService:
                 self.db.add(cliente)
             count += 1
 
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         db_count = self.db.query(ClienteFinal).filter(ClienteFinal.tenant_id == self.tenant_id).count()
         self._log_sync("clientes", len(items), db_count, 0)
         return {"synced": count, "total_api": len(items), "total_db": db_count}
