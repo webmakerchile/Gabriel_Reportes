@@ -33,7 +33,12 @@ class ClienteFinal(Base):
     email = Column(String(255), nullable=True)
     telefono = Column(String(50), nullable=True)
     direccion = Column(Text, nullable=True)
+    giro = Column(String(255), nullable=True)
+    comuna = Column(String(100), nullable=True)
+    ciudad = Column(String(100), nullable=True)
     activo = Column(Boolean, default=True)
+    obuma_id = Column(String(50), nullable=True)
+    data_json = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

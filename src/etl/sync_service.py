@@ -157,12 +157,21 @@ class SyncService:
             email = item.get("cliente_email", "")
             telefono = item.get("cliente_telefono", item.get("cliente_celular", ""))
             direccion = item.get("cliente_direccion_facturacion", "")
+            giro = item.get("cliente_giro", "")
+            comuna = item.get("cliente_comuna", "")
+            ciudad = item.get("cliente_ciudad", "")
+            obuma_id = self._safe_str(item.get("cliente_id", item.get("id", "")))
 
             if existing:
                 existing.nombre = nombre or existing.nombre
                 existing.email = email or existing.email
                 existing.telefono = telefono or existing.telefono
                 existing.direccion = direccion or existing.direccion
+                existing.giro = giro or existing.giro
+                existing.comuna = comuna or existing.comuna
+                existing.ciudad = ciudad or existing.ciudad
+                existing.obuma_id = obuma_id or existing.obuma_id
+                existing.data_json = self._to_json(item)
             else:
                 cliente = ClienteFinal(
                     tenant_id=self.tenant_id,
@@ -171,6 +180,11 @@ class SyncService:
                     email=email,
                     telefono=telefono,
                     direccion=direccion,
+                    giro=giro,
+                    comuna=comuna,
+                    ciudad=ciudad,
+                    obuma_id=obuma_id,
+                    data_json=self._to_json(item),
                 )
                 self.db.add(cliente)
             count += 1
@@ -469,11 +483,20 @@ class SyncService:
                 Empleado.tenant_id == self.tenant_id
             ).first()
 
+            nombres = self._safe_str(item.get("empleado_nombres", item.get("empleado_nombre", "")))
+            apellido_p = self._safe_str(item.get("empleado_apellido_p", ""))
+            apellido_m = self._safe_str(item.get("empleado_apellido_m", ""))
+            nombre_completo = " ".join(filter(None, [nombres, apellido_p, apellido_m])).strip() or "Sin nombre"
+            email = self._safe_str(item.get("empleado_email", item.get("empleado_email_personal", "")))
+            cargo_val = self._safe_str(item.get("empleado_cargo", ""))
+            if cargo_val == "0":
+                cargo_val = self._safe_str(item.get("empleado_codigo", ""))
+
             if existing:
                 existing.rut = self._safe_str(item.get("empleado_rut", item.get("rut"))) or existing.rut
-                existing.nombre = self._safe_str(item.get("empleado_nombre", item.get("nombre"))) or existing.nombre
-                existing.email = self._safe_str(item.get("empleado_email", item.get("email")))
-                existing.cargo = self._safe_str(item.get("empleado_cargo", item.get("cargo")))
+                existing.nombre = nombre_completo
+                existing.email = email
+                existing.cargo = cargo_val
                 existing.activo = str(item.get("empleado_activo", "1")) != "0"
                 existing.data_json = self._to_json(item)
             else:
@@ -481,9 +504,9 @@ class SyncService:
                     tenant_id=self.tenant_id,
                     obuma_id=obuma_id,
                     rut=self._safe_str(item.get("empleado_rut", item.get("rut"))),
-                    nombre=self._safe_str(item.get("empleado_nombre", item.get("nombre"))) or "Sin nombre",
-                    email=self._safe_str(item.get("empleado_email", item.get("email"))),
-                    cargo=self._safe_str(item.get("empleado_cargo", item.get("cargo"))),
+                    nombre=nombre_completo,
+                    email=email,
+                    cargo=cargo_val,
                     activo=str(item.get("empleado_activo", "1")) != "0",
                     data_json=self._to_json(item),
                 )

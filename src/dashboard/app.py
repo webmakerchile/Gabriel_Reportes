@@ -1262,96 +1262,170 @@ elif page == "Sincronizacion":
 # AUDITORIA
 # ============================================================
 elif page == "Auditoria":
-    st.markdown('<p class="page-title">Auditoria de Cifras</p>', unsafe_allow_html=True)
-    st.markdown('<p class="page-subtitle">Comparacion de datos entre la API de Obuma y la base de datos local</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-title">Auditoria de Datos</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-subtitle">Diagnostico completo de datos disponibles en Obuma y base de datos local</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
-        service = SyncService(db)
-        audit = service.audit_totals()
+        tab_diag, tab_tables, tab_logs = st.tabs(["Diagnostico API en Vivo", "Resumen de Tablas", "Log de Sincronizacion"])
 
-        col1, col2 = st.columns(2)
+        with tab_diag:
+            st.markdown('<p class="section-header">Consultar API Obuma en Tiempo Real</p>', unsafe_allow_html=True)
+            st.markdown(f'<p style="color:{TEXT_SECONDARY};font-size:0.9rem;">Este diagnostico consulta directamente la API de Obuma para verificar cuantos registros existen en cada endpoint. Permite identificar que datos estan disponibles para importar.</p>', unsafe_allow_html=True)
 
-        with col1:
-            st.markdown('<p class="section-header">Ventas</p>', unsafe_allow_html=True)
+            if st.button("Ejecutar Diagnostico Completo", type="primary", use_container_width=True):
+                with st.spinner("Consultando todos los endpoints de la API Obuma..."):
+                    client = ObumaClient()
+                    endpoints_to_test = [
+                        ("Clientes", "clientes.list.json"),
+                        ("Contactos Clientes", "clientesContactos.listAll.json"),
+                        ("Direcciones Clientes", "clientesDirecciones.listAll.json"),
+                        ("Proveedores", "proveedores.list.json"),
+                        ("Productos", "productos.list.json"),
+                        ("Categorias Productos", "productosCategorias.list.json"),
+                        ("Subcategorias Productos", "productosSubCategorias.list.json"),
+                        ("Fabricantes Productos", "productosFabricantes.list.json"),
+                        ("Precios Productos", "productosConsultaPrecios.list.json"),
+                        ("Empleados", "empleados.list.json"),
+                        ("Remuneraciones", "remuneraciones.list.json"),
+                        ("Ventas", "ventas.list.json"),
+                        ("Items de Venta", "ventas.listItems.json"),
+                        ("Cotizaciones", "ventasCotizaciones.list.json"),
+                        ("Cobros", "ventasCobros.list.json"),
+                        ("DTE Emitidos", "ventas.listDte.json"),
+                        ("Compras", "compras.list.json"),
+                        ("Ordenes de Compra", "comprasOc.list.json"),
+                        ("Pagos Proveedores", "comprasPagos.list.json"),
+                        ("Contabilidad", "contabilidad.listDiario.json"),
+                        ("CRM Leads", "crm.list.json"),
+                    ]
 
-            v = audit["ventas"]
+                    diag_results = []
+                    for name, endpoint in endpoints_to_test:
+                        try:
+                            result = run_async(client.test_endpoint(endpoint))
+                            if "error" in result:
+                                status_code = result.get("status_code", "?")
+                                diag_results.append({
+                                    "Endpoint": name,
+                                    "API Obuma": f"Error ({status_code})",
+                                    "Estado": "NO DISPONIBLE",
+                                    "Detalle": str(result.get("error", ""))[:80]
+                                })
+                            else:
+                                total = result.get("data-total-items", 0)
+                                data_list = result.get("data") or []
+                                actual = len(data_list) if isinstance(data_list, list) else 0
+                                estado = "CON DATOS" if total and int(total) > 0 else "SIN DATOS"
+                                diag_results.append({
+                                    "Endpoint": name,
+                                    "API Obuma": f"{total} registros",
+                                    "Estado": estado,
+                                    "Detalle": f"{actual} en ultima pagina"
+                                })
+                        except Exception as e:
+                            diag_results.append({
+                                "Endpoint": name,
+                                "API Obuma": "Error",
+                                "Estado": "ERROR",
+                                "Detalle": str(e)[:80]
+                            })
+
+                    df_diag = pd.DataFrame(diag_results)
+
+                    con_datos = sum(1 for r in diag_results if r["Estado"] == "CON DATOS")
+                    sin_datos = sum(1 for r in diag_results if r["Estado"] == "SIN DATOS")
+                    errores = sum(1 for r in diag_results if r["Estado"] in ("ERROR", "NO DISPONIBLE"))
+
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        render_metric("Con Datos", str(con_datos), "✅", ACCENT_GREEN)
+                    with c2:
+                        render_metric("Sin Datos", str(sin_datos), "⚠️", ACCENT_AMBER)
+                    with c3:
+                        render_metric("No Disponible", str(errores), "❌", ACCENT_RED)
+
+                    st.markdown("")
+
+                    def color_estado(val):
+                        if val == "CON DATOS":
+                            return f"background-color: rgba(16,185,129,0.15); color: #34d399;"
+                        elif val == "SIN DATOS":
+                            return f"background-color: rgba(245,158,11,0.15); color: #fbbf24;"
+                        else:
+                            return f"background-color: rgba(239,68,68,0.15); color: #f87171;"
+
+                    styled_df = df_diag.style.map(color_estado, subset=["Estado"])
+                    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
+
+                    if sin_datos > 10:
+                        st.warning(f"Su cuenta Obuma tiene datos solo en {con_datos} de {len(diag_results)} endpoints. Los endpoints sin datos ({sin_datos}) no tienen registros cargados en su ERP Obuma. Para que aparezcan aqui, primero debe cargar esos datos en Obuma (productos, compras, contabilidad, etc).")
+
+        with tab_tables:
+            st.markdown('<p class="section-header">Registros en Base de Datos Local</p>', unsafe_allow_html=True)
+            table_counts = [
+                ("Clientes", db.query(ClienteFinal).count(), "clientes.list.json"),
+                ("Contactos", db.query(ClienteContacto).count(), "clientesContactos.listAll.json"),
+                ("Direcciones", db.query(ClienteDireccion).count(), "clientesDirecciones.listAll.json"),
+                ("Proveedores", db.query(Proveedor).count(), "proveedores.list.json"),
+                ("Productos", db.query(Producto).count(), "productos.list.json"),
+                ("Categorias", db.query(ProductoCategoria).count(), "productosCategorias.list.json"),
+                ("Subcategorias", db.query(ProductoSubCategoria).count(), "productosSubCategorias.list.json"),
+                ("Fabricantes", db.query(ProductoFabricante).count(), "productosFabricantes.list.json"),
+                ("Precios", db.query(ProductoPrecio).count(), "productosConsultaPrecios.list.json"),
+                ("Empleados", db.query(Empleado).count(), "empleados.list.json"),
+                ("Remuneraciones", db.query(Remuneracion).count(), "remuneraciones.list.json"),
+                ("Ventas", db.query(VentaHistorico).count(), "ventas.list.json"),
+                ("Items Venta", db.query(VentaItem).count(), "ventas.listItems.json"),
+                ("Cotizaciones", db.query(VentaCotizacion).count(), "ventasCotizaciones.list.json"),
+                ("Cobros", db.query(VentaCobro).count(), "ventasCobros.list.json"),
+                ("DTE Emitidos", db.query(VentaDte).count(), "ventas.listDte.json"),
+                ("Compras", db.query(CompraHistorico).count(), "compras.list.json"),
+                ("Ordenes Compra", db.query(CompraOC).count(), "comprasOc.list.json"),
+                ("Pagos Proveedores", db.query(CompraPago).count(), "comprasPagos.list.json"),
+                ("DTE Recibidos", db.query(CompraDteRecibido).count(), "comprasDteRecibidos.list.json"),
+                ("Contabilidad", db.query(ContabilidadHistorico).count(), "contabilidad.listDiario.json"),
+                ("Gastos Menores", db.query(GastoMenor).count(), "comprasGastosMenores.list.json"),
+                ("CRM Leads", db.query(CrmLead).count(), "crm.list.json"),
+                ("Costos Historicos", db.query(CostoHistorico).count(), "-"),
+            ]
+
+            total_registros = sum(t[1] for t in table_counts)
+            tablas_con_datos = sum(1 for t in table_counts if t[1] > 0)
+
             c1, c2 = st.columns(2)
             with c1:
-                render_metric("Total BD", format_clp(v["total_db"]), "🗄️", ACCENT_BLUE)
+                render_metric("Total Registros BD", str(total_registros), "🗄️", ACCENT_BLUE)
             with c2:
-                render_metric("Registros BD", str(v["registros_db"]), "📊")
+                render_metric("Tablas con Datos", f"{tablas_con_datos}/{len(table_counts)}", "📊", ACCENT_GREEN)
 
             st.markdown("")
-            c3, c4 = st.columns(2)
-            with c3:
-                render_metric("Total API (Sync)", format_clp(v["ultima_sync_api_total"]), "🌐", ACCENT_AMBER)
-            with c4:
-                render_metric("Registros API", str(v["ultima_sync_api_registros"]), "📡")
+            df_tables = pd.DataFrame(table_counts, columns=["Tabla", "Registros", "Endpoint API"])
 
-            discrepancia = v["discrepancia_total"]
-            if discrepancia > 0:
-                st.error(f"Discrepancia detectada: {format_clp(discrepancia)}")
+            def color_registros(val):
+                if isinstance(val, (int, float)) and val > 0:
+                    return "color: #34d399; font-weight: bold;"
+                elif isinstance(val, (int, float)):
+                    return "color: #64748b;"
+                return ""
+
+            styled = df_tables.style.map(color_registros, subset=["Registros"])
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=700)
+
+        with tab_logs:
+            st.markdown('<p class="section-header">Historial de Sincronizacion</p>', unsafe_allow_html=True)
+            logs = db.query(SyncLog).order_by(SyncLog.ejecutado_at.desc()).limit(30).all()
+            if logs:
+                data = [{
+                    "Fecha": str(l.ejecutado_at)[:16],
+                    "Modulo": l.endpoint,
+                    "Registros API": l.registros_api,
+                    "Registros BD": l.registros_db,
+                    "Discrepancias": l.discrepancias,
+                    "Estado": l.estado.upper(),
+                } for l in logs]
+                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=600)
             else:
-                st.success("Sin discrepancias en ventas")
-
-        with col2:
-            st.markdown('<p class="section-header">Compras</p>', unsafe_allow_html=True)
-
-            c = audit["compras"]
-            c1, c2 = st.columns(2)
-            with c1:
-                render_metric("Total BD", format_clp(c["total_db"]), "🗄️", ACCENT_BLUE)
-            with c2:
-                render_metric("Registros BD", str(c["registros_db"]), "📊")
-            st.markdown("")
-            render_metric("Registros API (Sync)", str(c["ultima_sync_api_registros"]), "📡", ACCENT_AMBER)
-
-        st.markdown("---")
-
-        st.markdown('<p class="section-header">Resumen de Tablas</p>', unsafe_allow_html=True)
-        table_counts = [
-            ("Clientes", db.query(ClienteFinal).count()),
-            ("Contactos", db.query(ClienteContacto).count()),
-            ("Direcciones", db.query(ClienteDireccion).count()),
-            ("Proveedores", db.query(Proveedor).count()),
-            ("Productos", db.query(Producto).count()),
-            ("Categorias", db.query(ProductoCategoria).count()),
-            ("Subcategorias", db.query(ProductoSubCategoria).count()),
-            ("Fabricantes", db.query(ProductoFabricante).count()),
-            ("Precios", db.query(ProductoPrecio).count()),
-            ("Empleados", db.query(Empleado).count()),
-            ("Remuneraciones", db.query(Remuneracion).count()),
-            ("Ventas", db.query(VentaHistorico).count()),
-            ("Items Venta", db.query(VentaItem).count()),
-            ("Cotizaciones", db.query(VentaCotizacion).count()),
-            ("Cobros", db.query(VentaCobro).count()),
-            ("DTE Emitidos", db.query(VentaDte).count()),
-            ("Compras", db.query(CompraHistorico).count()),
-            ("Ordenes Compra", db.query(CompraOC).count()),
-            ("Pagos Proveedores", db.query(CompraPago).count()),
-            ("DTE Recibidos", db.query(CompraDteRecibido).count()),
-            ("Contabilidad", db.query(ContabilidadHistorico).count()),
-            ("Gastos Menores", db.query(GastoMenor).count()),
-            ("CRM Leads", db.query(CrmLead).count()),
-            ("Costos Historicos", db.query(CostoHistorico).count()),
-        ]
-        df_tables = pd.DataFrame(table_counts, columns=["Tabla", "Registros"])
-        st.dataframe(df_tables, use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-        st.markdown('<p class="section-header">Log de Auditorias</p>', unsafe_allow_html=True)
-
-        logs = db.query(SyncLog).order_by(SyncLog.ejecutado_at.desc()).limit(15).all()
-        if logs:
-            data = [{
-                "Fecha": str(l.ejecutado_at)[:16],
-                "Modulo": l.endpoint,
-                "Total API": format_clp(l.total_api),
-                "Total BD": format_clp(l.total_db),
-                "Discrepancias": l.discrepancias,
-                "Estado": l.estado.upper(),
-            } for l in logs]
-            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.info("Sin historial de sincronizacion.")
     finally:
         db.close()
