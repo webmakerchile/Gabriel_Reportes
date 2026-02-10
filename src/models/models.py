@@ -516,3 +516,28 @@ class VendedorCartera(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "empleado_obuma_id", "cliente_id", name="uq_vendedor_cartera_tenant_empleado_cliente"),
     )
+
+
+class ReporteProgramado(Base):
+    __tablename__ = "reportes_programados"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    nombre = Column(String(255), nullable=False)
+    tipo_reporte = Column(String(50), nullable=False)
+    vendedor_obuma_id = Column(String(50), nullable=True)
+    frecuencia = Column(String(50), nullable=False)
+    dia_semana = Column(Integer, nullable=True)
+    dia_mes = Column(Integer, nullable=True)
+    hora = Column(Integer, default=8)
+    minuto = Column(Integer, default=0)
+    emails_destino = Column(Text, nullable=False)
+    filtro_fecha_tipo = Column(String(50), default="mes_actual")
+    filtro_fecha_desde = Column(Date, nullable=True)
+    filtro_fecha_hasta = Column(Date, nullable=True)
+    activo = Column(Boolean, default=True)
+    ultima_ejecucion = Column(DateTime, nullable=True)
+    proxima_ejecucion = Column(DateTime, nullable=True)
+    total_enviados = Column(Integer, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

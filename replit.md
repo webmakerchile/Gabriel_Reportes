@@ -39,6 +39,7 @@ reports/                    # Directorio de reportes generados
 - **Tenant**: Multi-tenant support
 - **SyncLog**: Log de sincronizaciones con API
 - **ReporteGenerado**: Reportes Excel generados
+- **ReporteProgramado**: Reportes programados con frecuencia, emails, filtros
 - **ObumaApiEndpoint**: Catalogo completo de endpoints API Obuma (30 registros)
 
 ### Clientes
@@ -147,7 +148,7 @@ reports/                    # Directorio de reportes generados
 - **Contabilidad**: Libro diario, balance debe/haber
 - **CRM**: Leads y oportunidades comerciales
 - **API Obuma**: Catalogo 30 endpoints, probador en vivo
-- **Reportes**: Generacion Excel por vendedor con rango fechas personalizable (ano o rango custom)
+- **Reportes**: Centro completo de reportes: Generar Ahora (individual/todos), Programar Envio (diario/semanal/quincenal/mensual con emails), Historial, Configuracion Email
 - **Sincronizacion**: Importacion datos Obuma, historial sync
 - **Auditoria**: Diagnostico API en vivo, resumen tablas, log sync
 

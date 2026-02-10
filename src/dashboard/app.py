@@ -23,6 +23,8 @@ from src.models.models import (
 from src.etl.sync_service import SyncService
 from src.etl.obuma_client import ObumaClient
 from src.reports.excel_generator import generate_vendedor_report, generate_all_vendedor_reports
+from src.reports.email_service import send_report_email, build_report_email_html, check_email_config
+from src.models.models import ReporteProgramado
 
 Base.metadata.create_all(bind=engine)
 
@@ -1832,162 +1834,527 @@ elif page == "API Obuma":
 # REPORTES
 # ============================================================
 elif page == "Reportes":
-    st.markdown('<p class="page-title">Reportes Excel - Evolucion por Vendedor</p>', unsafe_allow_html=True)
-    st.markdown('<p class="page-subtitle">Reportes de ventas por vendedor con segmentacion ABC y nivel de riesgo</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-title">Centro de Reportes</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-subtitle">Genera, programa y gestiona reportes de ventas por vendedor</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
-        vendedores = db.query(Empleado).order_by(Empleado.nombre).all()
+        vendedores_all = db.query(Empleado).filter(Empleado.activo == True).order_by(Empleado.nombre).all()
+        tracked_vends = [v for v in vendedores_all if v.obuma_id in TRACKED_VENDEDOR_IDS]
+        other_vends = [v for v in vendedores_all if v.obuma_id not in TRACKED_VENDEDOR_IDS]
+        sorted_vendedores = tracked_vends + other_vends
+        vendedor_map = {f"{v.nombre} ({v.cargo or 'Vendedor'})": v.obuma_id for v in sorted_vendedores}
+        vendedor_name_map = {v.obuma_id: v.nombre for v in vendedores_all}
+        vendedor_display_list = list(vendedor_map.keys())
 
-        st.markdown('<p class="section-header">Generar Reportes por Vendedor</p>', unsafe_allow_html=True)
-
-        tab_individual, tab_todos = st.tabs(["Reporte Individual", "Todos los Vendedores"])
-
-        with tab_individual:
-            vendedor_options = {f"{v.nombre} ({v.cargo or 'Sin cargo'})": v.obuma_id for v in vendedores}
-            vendedor_sel = st.selectbox("Seleccionar Vendedor", list(vendedor_options.keys()))
-
-            st.markdown('<p class="section-header">Rango de Fechas</p>', unsafe_allow_html=True)
-            range_mode = st.radio("Modo", ["Por Ano", "Rango Personalizado"], horizontal=True, key="rng_ind")
-
-            if range_mode == "Por Ano":
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    year_report = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="yr_ind")
-                with col2:
-                    st.write("")
-                    st.write("")
-                    if st.button("Generar", type="primary", use_container_width=True, key="gen_individual"):
-                        vendedor_obuma_id = vendedor_options[vendedor_sel]
-                        with st.spinner(f"Generando reporte para {vendedor_sel}..."):
-                            try:
-                                year_val = int(year_report)
-                                date_from_r = date(year_val, 1, 1)
-                                date_to_r = date(year_val, 12, 31)
-                                filepath = generate_vendedor_report(db, vendedor_obuma_id, date_from_r, date_to_r)
-                                if filepath:
-                                    st.success(f"Reporte generado: {os.path.basename(filepath)}")
-                                    with open(filepath, "rb") as f:
-                                        st.download_button(
-                                            label="Descargar Reporte",
-                                            data=f.read(),
-                                            file_name=os.path.basename(filepath),
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True,
-                                            key="dl_individual"
-                                        )
-                                else:
-                                    st.warning("Este vendedor no tiene ventas registradas en el periodo.")
-                            except Exception as e:
-                                st.error(f"Error generando reporte: {str(e)}")
+        def calc_proxima_ejecucion(freq, dia_semana, dia_mes, hora, minuto, ultima_ej, created):
+            now = datetime.now()
+            base_time = now.replace(hour=hora, minute=minuto, second=0, microsecond=0)
+            freq_lower = (freq or "").lower()
+            if freq_lower == "diario":
+                nxt = base_time + timedelta(days=1) if now >= base_time else base_time
+            elif freq_lower == "semanal":
+                ds = dia_semana if dia_semana is not None else 0
+                days_ahead = ds - now.weekday()
+                if days_ahead < 0 or (days_ahead == 0 and now >= base_time):
+                    days_ahead += 7
+                nxt = (now + timedelta(days=days_ahead)).replace(hour=hora, minute=minuto, second=0, microsecond=0)
+            elif freq_lower == "quincenal":
+                ref = ultima_ej or created or now
+                if isinstance(ref, date) and not isinstance(ref, datetime):
+                    ref = datetime.combine(ref, datetime.min.time())
+                nxt = ref + timedelta(days=14)
+                nxt = nxt.replace(hour=hora, minute=minuto, second=0, microsecond=0)
+                while nxt <= now:
+                    nxt += timedelta(days=14)
+            elif freq_lower == "mensual":
+                dm = dia_mes if dia_mes else 1
+                try:
+                    nxt = now.replace(day=dm, hour=hora, minute=minuto, second=0, microsecond=0)
+                except ValueError:
+                    nxt = now.replace(day=28, hour=hora, minute=minuto, second=0, microsecond=0)
+                if nxt <= now:
+                    month = nxt.month + 1
+                    year = nxt.year
+                    if month > 12:
+                        month = 1
+                        year += 1
+                    try:
+                        nxt = nxt.replace(year=year, month=month, day=dm)
+                    except ValueError:
+                        nxt = nxt.replace(year=year, month=month, day=28)
             else:
-                col1, col2, col3 = st.columns([2, 2, 1])
-                with col1:
-                    rpt_date_from = st.date_input("Desde", value=date(date.today().year, 1, 1), key="rpt_from_ind")
-                with col2:
-                    rpt_date_to = st.date_input("Hasta", value=date.today(), key="rpt_to_ind")
-                with col3:
-                    st.write("")
-                    st.write("")
-                    if st.button("Generar", type="primary", use_container_width=True, key="gen_individual_custom"):
-                        vendedor_obuma_id = vendedor_options[vendedor_sel]
-                        with st.spinner(f"Generando reporte para {vendedor_sel}..."):
-                            try:
-                                filepath = generate_vendedor_report(db, vendedor_obuma_id, rpt_date_from, rpt_date_to)
-                                if filepath:
-                                    st.success(f"Reporte generado: {os.path.basename(filepath)}")
-                                    with open(filepath, "rb") as f:
-                                        st.download_button(
-                                            label="Descargar Reporte",
-                                            data=f.read(),
-                                            file_name=os.path.basename(filepath),
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True,
-                                            key="dl_individual_custom"
-                                        )
-                                else:
-                                    st.warning("Este vendedor no tiene ventas registradas en el periodo.")
-                            except Exception as e:
-                                st.error(f"Error generando reporte: {str(e)}")
+                nxt = base_time + timedelta(days=1)
+            return nxt
 
-        with tab_todos:
-            st.markdown('<p class="section-header">Rango de Fechas</p>', unsafe_allow_html=True)
-            range_mode_all = st.radio("Modo", ["Por Ano", "Rango Personalizado"], horizontal=True, key="rng_all")
+        tab_generar, tab_programar, tab_historial, tab_config = st.tabs([
+            "📄 Generar Ahora", "⏰ Programar Envio", "📋 Historial", "⚙️ Configuracion Email"
+        ])
 
-            if range_mode_all == "Por Ano":
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    year_all = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="year_all")
-                with col2:
-                    st.write("")
-                    st.write("")
-                    if st.button("Generar Todos", type="primary", use_container_width=True, key="gen_all"):
-                        with st.spinner("Generando reportes para todos los vendedores..."):
-                            try:
-                                year_val_all = int(year_all)
-                                date_from_all = date(year_val_all, 1, 1)
-                                date_to_all = date(year_val_all, 12, 31)
-                                filepaths = generate_all_vendedor_reports(db, date_from_all, date_to_all)
-                                st.success(f"Se generaron {len(filepaths)} reportes")
-                                for fp in filepaths:
-                                    with open(fp, "rb") as f:
-                                        st.download_button(
-                                            label=f"Descargar {os.path.basename(fp)}",
-                                            data=f.read(),
-                                            file_name=os.path.basename(fp),
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            key=f"dl_all_{os.path.basename(fp)}"
-                                        )
-                            except Exception as e:
-                                st.error(f"Error: {str(e)}")
-            else:
-                col1, col2, col3 = st.columns([2, 2, 1])
-                with col1:
-                    rpt_date_from_all = st.date_input("Desde", value=date(date.today().year, 1, 1), key="rpt_from_all")
-                with col2:
-                    rpt_date_to_all = st.date_input("Hasta", value=date.today(), key="rpt_to_all")
-                with col3:
-                    st.write("")
-                    st.write("")
-                    if st.button("Generar Todos", type="primary", use_container_width=True, key="gen_all_custom"):
-                        with st.spinner("Generando reportes para todos los vendedores..."):
-                            try:
-                                filepaths = generate_all_vendedor_reports(db, rpt_date_from_all, rpt_date_to_all)
-                                st.success(f"Se generaron {len(filepaths)} reportes")
-                                for fp in filepaths:
-                                    with open(fp, "rb") as f:
-                                        st.download_button(
-                                            label=f"Descargar {os.path.basename(fp)}",
-                                            data=f.read(),
-                                            file_name=os.path.basename(fp),
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            key=f"dl_allc_{os.path.basename(fp)}"
-                                        )
-                            except Exception as e:
-                                st.error(f"Error: {str(e)}")
+        with tab_generar:
+            col_ind, col_all = st.columns(2, gap="large")
 
-        st.markdown("---")
-        st.markdown('<p class="section-header">Reportes Generados</p>', unsafe_allow_html=True)
+            with col_ind:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-icon">📊</div>
+                    <p class="metric-label">REPORTE INDIVIDUAL</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">Genera reporte para un vendedor especifico</p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("")
 
-        reportes = db.query(ReporteGenerado).order_by(ReporteGenerado.generado_at.desc()).limit(50).all()
-        if reportes:
-            for r in reportes:
-                col1, col2, col3 = st.columns([4, 3, 1])
-                col1.write(f"**{r.nombre_archivo}**")
-                col2.write(f"{str(r.generado_at)[:16]}")
-                if r.ruta_archivo and os.path.exists(r.ruta_archivo):
-                    with open(r.ruta_archivo, "rb") as f:
-                        col3.download_button(
-                            label="Descargar",
-                            data=f.read(),
-                            file_name=r.nombre_archivo,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"dl_{r.id}"
-                        )
+                rpt_vendedor_sel = st.selectbox("Vendedor", vendedor_display_list, key="rpt_ind_vendedor")
+                rpt_ind_mode = st.radio("Periodo", ["Por Ano", "Rango Personalizado"], horizontal=True, key="rpt_ind_mode")
+
+                if rpt_ind_mode == "Por Ano":
+                    rpt_ind_year = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="rpt_ind_year")
+                    rpt_ind_from = date(int(rpt_ind_year), 1, 1)
+                    rpt_ind_to = date(int(rpt_ind_year), 12, 31)
                 else:
-                    col3.write("N/A")
-        else:
-            st.info("No se han generado reportes aun. Use los botones de arriba para generar.")
+                    rc1, rc2 = st.columns(2)
+                    with rc1:
+                        rpt_ind_from = st.date_input("Desde", value=date(date.today().year, 1, 1), key="rpt_ind_from")
+                    with rc2:
+                        rpt_ind_to = st.date_input("Hasta", value=date.today(), key="rpt_ind_to")
+
+                if st.button("Generar Reporte Individual", type="primary", use_container_width=True, key="rpt_gen_ind"):
+                    vid = vendedor_map[rpt_vendedor_sel]
+                    with st.spinner(f"Generando reporte para {rpt_vendedor_sel}..."):
+                        try:
+                            fp = generate_vendedor_report(db, vid, rpt_ind_from, rpt_ind_to)
+                            if fp:
+                                st.session_state["rpt_last_files"] = [fp]
+                                st.session_state["rpt_last_type"] = "individual"
+                                st.session_state["rpt_last_date_from"] = rpt_ind_from
+                                st.session_state["rpt_last_date_to"] = rpt_ind_to
+                                st.success(f"Reporte generado: {os.path.basename(fp)}")
+                            else:
+                                st.warning("Este vendedor no tiene ventas en el periodo seleccionado.")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+
+            with col_all:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-icon">👥</div>
+                    <p class="metric-label">REPORTE TODOS LOS VENDEDORES</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">Genera reportes para los 5 vendedores principales</p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("")
+
+                rpt_all_mode = st.radio("Periodo", ["Por Ano", "Rango Personalizado"], horizontal=True, key="rpt_all_mode")
+
+                if rpt_all_mode == "Por Ano":
+                    rpt_all_year = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="rpt_all_year")
+                    rpt_all_from = date(int(rpt_all_year), 1, 1)
+                    rpt_all_to = date(int(rpt_all_year), 12, 31)
+                else:
+                    ac1, ac2 = st.columns(2)
+                    with ac1:
+                        rpt_all_from = st.date_input("Desde", value=date(date.today().year, 1, 1), key="rpt_all_from")
+                    with ac2:
+                        rpt_all_to = st.date_input("Hasta", value=date.today(), key="rpt_all_to")
+
+                if st.button("Generar Todos los Reportes", type="primary", use_container_width=True, key="rpt_gen_all"):
+                    with st.spinner("Generando reportes para todos los vendedores..."):
+                        try:
+                            fps = generate_all_vendedor_reports(db, rpt_all_from, rpt_all_to)
+                            if fps:
+                                st.session_state["rpt_last_files"] = fps
+                                st.session_state["rpt_last_type"] = "todos"
+                                st.session_state["rpt_last_date_from"] = rpt_all_from
+                                st.session_state["rpt_last_date_to"] = rpt_all_to
+                                st.success(f"Se generaron {len(fps)} reportes exitosamente")
+                            else:
+                                st.warning("No se encontraron ventas en el periodo seleccionado.")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+
+            if st.session_state.get("rpt_last_files"):
+                st.markdown("---")
+                st.markdown('<p class="section-header">Reportes Generados</p>', unsafe_allow_html=True)
+
+                for idx, fp in enumerate(st.session_state["rpt_last_files"]):
+                    if os.path.exists(fp):
+                        dc1, dc2 = st.columns([3, 1])
+                        with dc1:
+                            st.markdown(f"📄 **{os.path.basename(fp)}**")
+                        with dc2:
+                            with open(fp, "rb") as f:
+                                st.download_button(
+                                    label="⬇️ Descargar",
+                                    data=f.read(),
+                                    file_name=os.path.basename(fp),
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"rpt_dl_{idx}",
+                                    use_container_width=True
+                                )
+
+                with st.expander("📧 Enviar por Email", expanded=False):
+                    rpt_emails = st.text_input(
+                        "Emails (separados por coma)",
+                        placeholder="gabriel@vlsur.cl, jhonatan@vlsur.cl",
+                        key="rpt_send_emails"
+                    )
+                    if st.button("Enviar Reportes por Email", type="primary", key="rpt_send_email_btn"):
+                        if not rpt_emails.strip():
+                            st.error("Ingrese al menos un email.")
+                        else:
+                            email_list = [e.strip() for e in rpt_emails.replace("\n", ",").split(",") if e.strip()]
+                            with st.spinner("Enviando email..."):
+                                stored_from = st.session_state.get("rpt_last_date_from", "")
+                                stored_to = st.session_state.get("rpt_last_date_to", "")
+                                date_range_str = f"{stored_from} - {stored_to}"
+                                body = build_report_email_html(
+                                    "Vendedores",
+                                    st.session_state.get("rpt_last_type", "reporte"),
+                                    date_range_str
+                                )
+                                result = send_report_email(
+                                    email_list,
+                                    "Reporte de Ventas - BI Platform",
+                                    body,
+                                    st.session_state["rpt_last_files"]
+                                )
+                                if result.get("success"):
+                                    st.success(f"Email enviado a {', '.join(email_list)}")
+                                else:
+                                    st.error(f"Error enviando email: {result.get('error', 'Error desconocido')}")
+
+        with tab_programar:
+            st.markdown('<p class="section-header">Crear Nueva Programacion</p>', unsafe_allow_html=True)
+
+            with st.form("rpt_schedule_form", clear_on_submit=True):
+                rpt_sched_name = st.text_input("Nombre del Reporte", value="Reporte Semanal Ventas", key="rpt_sched_name")
+
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    rpt_sched_tipo = st.selectbox("Tipo de Reporte", ["Individual (1 vendedor)", "Todos los vendedores"], key="rpt_sched_tipo")
+                with sc2:
+                    rpt_sched_vendedor = st.selectbox("Vendedor (solo si individual)", vendedor_display_list, key="rpt_sched_vendedor")
+
+                sc3, sc4 = st.columns(2)
+                with sc3:
+                    rpt_sched_freq = st.selectbox("Frecuencia", ["Diario", "Semanal", "Quincenal", "Mensual"], index=1, key="rpt_sched_freq")
+                with sc4:
+                    rpt_sched_dia_semana = st.selectbox("Dia de la Semana (si semanal)", ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes"], key="rpt_sched_dia_semana")
+
+                sc5, sc6, sc7 = st.columns(3)
+                with sc5:
+                    rpt_sched_dia_mes = st.number_input("Dia del Mes (si mensual)", min_value=1, max_value=28, value=1, key="rpt_sched_dia_mes")
+                with sc6:
+                    rpt_sched_hora = st.number_input("Hora", min_value=0, max_value=23, value=8, key="rpt_sched_hora")
+                with sc7:
+                    rpt_sched_min = st.selectbox("Minuto", [0, 15, 30, 45], key="rpt_sched_min")
+
+                rpt_sched_emails = st.text_area(
+                    "Emails Destino (uno por linea o separados por coma)",
+                    placeholder="gabriel@vlsur.cl\njhonatan@vlsur.cl",
+                    key="rpt_sched_emails"
+                )
+
+                sc8, sc9 = st.columns(2)
+                with sc8:
+                    rpt_sched_periodo = st.selectbox("Periodo del Reporte", [
+                        "Mes Actual", "Mes Anterior", "Ultimo Trimestre", "Ano Actual", "Rango Personalizado"
+                    ], key="rpt_sched_periodo")
+                with sc9:
+                    rpt_sched_custom_from = st.date_input("Desde (si personalizado)", value=date(date.today().year, 1, 1), key="rpt_sched_custom_from")
+
+                rpt_sched_custom_to = st.date_input("Hasta (si personalizado)", value=date.today(), key="rpt_sched_custom_to")
+
+                submitted = st.form_submit_button("✅ Crear Programacion", type="primary", use_container_width=True)
+
+                if submitted:
+                    if not rpt_sched_name.strip():
+                        st.error("Ingrese un nombre para el reporte.")
+                    elif not rpt_sched_emails.strip():
+                        st.error("Ingrese al menos un email destino.")
+                    else:
+                        dia_sem_map = {"Lunes": 0, "Martes": 1, "Miercoles": 2, "Jueves": 3, "Viernes": 4}
+                        periodo_map = {
+                            "Mes Actual": "mes_actual",
+                            "Mes Anterior": "mes_anterior",
+                            "Ultimo Trimestre": "ultimo_trimestre",
+                            "Ano Actual": "ano_actual",
+                            "Rango Personalizado": "personalizado"
+                        }
+                        FRECUENCIA_MAP = {
+                            "Diario": "diario",
+                            "Semanal": "semanal",
+                            "Quincenal": "quincenal",
+                            "Mensual": "mensual",
+                        }
+                        tipo_val = "individual" if "Individual" in rpt_sched_tipo else "todos"
+                        vid_val = vendedor_map.get(rpt_sched_vendedor) if tipo_val == "individual" else None
+                        freq_val = FRECUENCIA_MAP.get(rpt_sched_freq, rpt_sched_freq.lower())
+
+                        nuevo = ReporteProgramado(
+                            tenant_id=1,
+                            nombre=rpt_sched_name.strip(),
+                            tipo_reporte=tipo_val,
+                            vendedor_obuma_id=vid_val,
+                            frecuencia=freq_val,
+                            dia_semana=dia_sem_map.get(rpt_sched_dia_semana) if rpt_sched_freq == "Semanal" else None,
+                            dia_mes=rpt_sched_dia_mes if rpt_sched_freq == "Mensual" else None,
+                            hora=rpt_sched_hora,
+                            minuto=rpt_sched_min,
+                            emails_destino=rpt_sched_emails.strip(),
+                            filtro_fecha_tipo=periodo_map.get(rpt_sched_periodo, "mes_actual"),
+                            filtro_fecha_desde=rpt_sched_custom_from if rpt_sched_periodo == "Rango Personalizado" else None,
+                            filtro_fecha_hasta=rpt_sched_custom_to if rpt_sched_periodo == "Rango Personalizado" else None,
+                            activo=True,
+                            proxima_ejecucion=calc_proxima_ejecucion(
+                                rpt_sched_freq,
+                                dia_sem_map.get(rpt_sched_dia_semana),
+                                rpt_sched_dia_mes,
+                                rpt_sched_hora,
+                                rpt_sched_min,
+                                None, None
+                            )
+                        )
+                        db.add(nuevo)
+                        db.commit()
+                        st.success(f"Programacion '{rpt_sched_name}' creada exitosamente.")
+                        st.rerun()
+
+            st.markdown("---")
+            st.markdown('<p class="section-header">Programaciones Existentes</p>', unsafe_allow_html=True)
+
+            schedules = db.query(ReporteProgramado).filter(ReporteProgramado.tenant_id == 1).order_by(ReporteProgramado.created_at.desc()).all()
+
+            if not schedules:
+                st.info("No hay reportes programados. Use el formulario de arriba para crear uno.")
+            else:
+                for sched in schedules:
+                    freq_display = (sched.frecuencia or "N/A").capitalize()
+                    dia_sem_names = {0: "Lunes", 1: "Martes", 2: "Miercoles", 3: "Jueves", 4: "Viernes"}
+                    freq_detail = ""
+                    freq_lower = (sched.frecuencia or "").lower()
+                    if freq_lower == "semanal" and sched.dia_semana is not None:
+                        freq_detail = f" - {dia_sem_names.get(sched.dia_semana, 'N/A')}"
+                    elif freq_lower == "mensual" and sched.dia_mes:
+                        freq_detail = f" - Dia {sched.dia_mes}"
+                    hora_str = f"{sched.hora or 0:02d}:{sched.minuto or 0:02d}"
+
+                    tipo_display = "Individual" if sched.tipo_reporte == "individual" else "Todos"
+                    if sched.tipo_reporte == "individual" and sched.vendedor_obuma_id:
+                        vname = vendedor_name_map.get(sched.vendedor_obuma_id, sched.vendedor_obuma_id)
+                        tipo_display = f"Individual - {vname}"
+
+                    emails_preview = (sched.emails_destino or "")[:60]
+                    if len(sched.emails_destino or "") > 60:
+                        emails_preview += "..."
+
+                    badge_class = "badge-ok" if sched.activo else "badge-warning"
+                    badge_text = "Activo" if sched.activo else "Inactivo"
+
+                    prox = sched.proxima_ejecucion or calc_proxima_ejecucion(
+                        sched.frecuencia, sched.dia_semana, sched.dia_mes,
+                        sched.hora or 0, sched.minuto or 0,
+                        sched.ultima_ejecucion, sched.created_at
+                    )
+                    prox_str = prox.strftime("%d/%m/%Y %H:%M") if prox else "N/A"
+
+                    st.markdown(f"""
+                    <div class="metric-card" style="margin-bottom:0.8rem;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <p style="color:{TEXT_PRIMARY};font-weight:600;font-size:1rem;margin:0;">{sched.nombre}</p>
+                                <p style="color:{TEXT_SECONDARY};font-size:0.82rem;margin:4px 0 0;">
+                                    {tipo_display} · {freq_display}{freq_detail} · {hora_str} hrs
+                                </p>
+                                <p style="color:{TEXT_SECONDARY};font-size:0.78rem;margin:2px 0 0;">
+                                    📧 {emails_preview}
+                                </p>
+                                <p style="color:{TEXT_SECONDARY};font-size:0.78rem;margin:2px 0 0;">
+                                    Proxima: {prox_str} · Enviados: {sched.total_enviados or 0}
+                                </p>
+                            </div>
+                            <div>
+                                <span class="status-badge {badge_class}">{badge_text}</span>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    btn_c1, btn_c2 = st.columns(2)
+                    with btn_c1:
+                        toggle_label = "⏸ Desactivar" if sched.activo else "▶️ Activar"
+                        if st.button(toggle_label, key=f"rpt_toggle_{sched.id}", use_container_width=True):
+                            sched.activo = not sched.activo
+                            sched.proxima_ejecucion = calc_proxima_ejecucion(
+                                sched.frecuencia, sched.dia_semana, sched.dia_mes,
+                                sched.hora or 0, sched.minuto or 0,
+                                sched.ultima_ejecucion, sched.created_at
+                            ) if sched.activo else None
+                            db.commit()
+                            st.rerun()
+                    with btn_c2:
+                        if st.button("🗑 Eliminar", key=f"rpt_del_{sched.id}", use_container_width=True):
+                            st.session_state[f"rpt_confirm_del_{sched.id}"] = True
+
+                    if st.session_state.get(f"rpt_confirm_del_{sched.id}"):
+                        st.warning(f"¿Seguro que desea eliminar '{sched.nombre}'?")
+                        cc1, cc2 = st.columns(2)
+                        with cc1:
+                            if st.button("Si, eliminar", key=f"rpt_confirm_yes_{sched.id}", use_container_width=True):
+                                db.delete(sched)
+                                db.commit()
+                                del st.session_state[f"rpt_confirm_del_{sched.id}"]
+                                st.rerun()
+                        with cc2:
+                            if st.button("Cancelar", key=f"rpt_confirm_no_{sched.id}", use_container_width=True):
+                                del st.session_state[f"rpt_confirm_del_{sched.id}"]
+                                st.rerun()
+                    st.markdown("")
+
+        with tab_historial:
+            st.markdown('<p class="section-header">Historial de Reportes Generados</p>', unsafe_allow_html=True)
+
+            hc1, hc2, hc3 = st.columns([2, 2, 1])
+            with hc1:
+                hist_from = st.date_input("Desde", value=date.today() - timedelta(days=90), key="rpt_hist_from")
+            with hc2:
+                hist_to = st.date_input("Hasta", value=date.today(), key="rpt_hist_to")
+            with hc3:
+                hist_tipo = st.selectbox("Tipo", ["Todos", "vendedor", "diario"], key="rpt_hist_tipo")
+
+            hist_q = db.query(ReporteGenerado).filter(
+                ReporteGenerado.fecha_reporte >= hist_from,
+                ReporteGenerado.fecha_reporte <= hist_to
+            )
+            if hist_tipo != "Todos":
+                hist_q = hist_q.filter(ReporteGenerado.tipo == hist_tipo)
+
+            reportes_hist = hist_q.order_by(ReporteGenerado.generado_at.desc()).limit(100).all()
+
+            if reportes_hist:
+                st.markdown(f"<p style='color:{TEXT_SECONDARY};font-size:0.85rem;'>Mostrando {len(reportes_hist)} reportes</p>", unsafe_allow_html=True)
+                for r in reportes_hist:
+                    hrc1, hrc2, hrc3, hrc4 = st.columns([2, 3, 1, 1])
+                    with hrc1:
+                        fecha_str = r.generado_at.strftime("%d/%m/%Y %H:%M") if r.generado_at else "N/A"
+                        st.markdown(f"<p style='color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;'>{fecha_str}</p>", unsafe_allow_html=True)
+                    with hrc2:
+                        st.markdown(f"**{r.nombre_archivo}**")
+                    with hrc3:
+                        badge = "badge-info" if r.tipo == "vendedor" else "badge-ok"
+                        st.markdown(f'<span class="status-badge {badge}">{r.tipo}</span>', unsafe_allow_html=True)
+                    with hrc4:
+                        if r.ruta_archivo and os.path.exists(r.ruta_archivo):
+                            with open(r.ruta_archivo, "rb") as f:
+                                st.download_button(
+                                    label="⬇️",
+                                    data=f.read(),
+                                    file_name=r.nombre_archivo,
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key=f"rpt_hist_dl_{r.id}"
+                                )
+                        else:
+                            st.markdown(f"<span style='color:{TEXT_SECONDARY};font-size:0.8rem;'>N/A</span>", unsafe_allow_html=True)
+            else:
+                st.info("No se encontraron reportes para los filtros seleccionados.")
+
+        with tab_config:
+            st.markdown('<p class="section-header">Configuracion de Email</p>', unsafe_allow_html=True)
+
+            email_cfg = check_email_config()
+
+            if email_cfg["configured"]:
+                st.markdown(f"""
+                <div class="metric-card" style="border-left:4px solid {ACCENT_GREEN};">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <span style="font-size:2rem;">✅</span>
+                        <div>
+                            <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">Email Configurado</p>
+                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
+                                Metodo: {email_cfg['method']} · {email_cfg['detail']}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="metric-card" style="border-left:4px solid {ACCENT_RED};">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <span style="font-size:2rem;">⚠️</span>
+                        <div>
+                            <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">Email No Configurado</p>
+                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
+                                {email_cfg['detail']}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("")
+
+            with st.expander("📋 Variables de Entorno Necesarias", expanded=not email_cfg["configured"]):
+                st.markdown(f"""
+                <div class="data-card">
+                    <p style="color:{ACCENT_BLUE};font-weight:600;margin:0 0 8px;">Opcion 1: SendGrid (Recomendado)</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">
+                        <code>SENDGRID_API_KEY</code> — API Key de SendGrid
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("")
+                st.markdown(f"""
+                <div class="data-card">
+                    <p style="color:{ACCENT_AMBER};font-weight:600;margin:0 0 8px;">Opcion 2: SMTP</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">
+                        <code>SMTP_HOST</code> — Servidor SMTP<br>
+                        <code>SMTP_PORT</code> — Puerto (default: 587)<br>
+                        <code>SMTP_USER</code> — Usuario SMTP<br>
+                        <code>SMTP_PASS</code> — Contrasena SMTP
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("")
+                st.markdown(f"""
+                <div class="data-card">
+                    <p style="color:{ACCENT_GREEN};font-weight:600;margin:0 0 8px;">Variables Comunes (Opcionales)</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">
+                        <code>EMAIL_FROM</code> — Email remitente (default: reportes@vlsur.cl)<br>
+                        <code>EMAIL_FROM_NAME</code> — Nombre remitente (default: BI Platform - VLSur)
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("")
+            st.markdown('<p class="section-header">Enviar Email de Prueba</p>', unsafe_allow_html=True)
+
+            tc1, tc2 = st.columns([3, 1])
+            with tc1:
+                test_email = st.text_input("Email de prueba", placeholder="gabriel@vlsur.cl", key="rpt_test_email")
+            with tc2:
+                st.markdown("")
+                if st.button("Enviar Test", type="primary", use_container_width=True, key="rpt_test_send"):
+                    if not test_email.strip():
+                        st.error("Ingrese un email.")
+                    elif not email_cfg["configured"]:
+                        st.error("Configure el servicio de email primero.")
+                    else:
+                        with st.spinner("Enviando email de prueba..."):
+                            test_body = build_report_email_html(
+                                "Prueba",
+                                "Email de Prueba",
+                                datetime.now().strftime("%d/%m/%Y %H:%M")
+                            )
+                            result = send_report_email(
+                                [test_email.strip()],
+                                "Test - BI Platform Email",
+                                test_body
+                            )
+                            if result.get("success"):
+                                st.success(f"Email de prueba enviado a {test_email}")
+                            else:
+                                st.error(f"Error: {result.get('error', 'Error desconocido')}")
     finally:
         db.close()
 
