@@ -7,26 +7,13 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-
-def seed_database():
-    from src.database import SessionLocal, engine, Base
-    from src.etl.api_catalog_seed import seed_api_catalog
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    try:
-        seed_api_catalog(db)
-    finally:
-        db.close()
+IS_DEPLOYMENT = os.environ.get("REPL_DEPLOYMENT", "") == "1"
 
 
-def run_fastapi():
+def run_fastapi(port=8000):
     import uvicorn
     from src.api.main import app
-    from src.scheduler import start_scheduler
-
-    seed_database()
-    start_scheduler()
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
 def run_streamlit():
@@ -43,9 +30,13 @@ def run_streamlit():
 
 
 if __name__ == "__main__":
-    fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
-    fastapi_thread.start()
-    logger.info("FastAPI iniciado en puerto 8000")
+    if IS_DEPLOYMENT:
+        logger.info("Modo producción: FastAPI en puerto 5000 con scheduler y seed")
+        run_fastapi(port=5000)
+    else:
+        fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
+        fastapi_thread.start()
+        logger.info("FastAPI iniciado en puerto 8000")
 
-    logger.info("Iniciando Streamlit en puerto 5000")
-    run_streamlit()
+        logger.info("Iniciando Streamlit en puerto 5000")
+        run_streamlit()

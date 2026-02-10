@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from src.database import get_db, engine, Base
+from src.database import get_db, engine, Base, SessionLocal
 from src.models.models import (
     VentaHistorico, CompraHistorico, Producto, ContabilidadHistorico,
     ClienteFinal, SyncLog, ReporteGenerado
@@ -23,6 +23,19 @@ app = FastAPI(
     description="Plataforma de Business Intelligence para gestión de clientes Obuma",
     version="1.0.0",
 )
+
+
+@app.on_event("startup")
+def on_startup():
+    from src.etl.api_catalog_seed import seed_api_catalog
+    from src.scheduler import start_scheduler
+    db = SessionLocal()
+    try:
+        seed_api_catalog(db)
+    finally:
+        db.close()
+    start_scheduler()
+    logger.info("FastAPI startup: DB seeded, scheduler started")
 
 
 @app.get("/")

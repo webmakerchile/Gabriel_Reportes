@@ -13,6 +13,9 @@ OBUMA_API_KEY = "ff5bfe7710dd17ac298f60bd469b7b9b"
 OBUMA_BASE_URL = "https://api.obuma.cl/v1.0"
 TZ = "America/Santiago"
 
+[userenv.production]
+REPL_DEPLOYMENT = "1"
+
 [workflows]
 runButton = "Project"
 
