@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import date, datetime
 from fastapi import FastAPI, Depends, HTTPException, Query
@@ -16,8 +17,6 @@ from src.reports.excel_generator import generate_daily_report
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(
     title="BI Platform - Gabriel Hoyos",
     description="Plataforma de Business Intelligence para gestión de clientes Obuma",
@@ -25,22 +24,31 @@ app = FastAPI(
 )
 
 
-@app.on_event("startup")
-def on_startup():
-    from src.etl.api_catalog_seed import seed_api_catalog
-    from src.scheduler import start_scheduler
-    db = SessionLocal()
+async def _background_startup():
     try:
-        seed_api_catalog(db)
-    finally:
-        db.close()
-    start_scheduler()
-    logger.info("FastAPI startup: DB seeded, scheduler started")
+        Base.metadata.create_all(bind=engine)
+        from src.etl.api_catalog_seed import seed_api_catalog
+        from src.scheduler import start_scheduler
+        db = SessionLocal()
+        try:
+            seed_api_catalog(db)
+        finally:
+            db.close()
+        start_scheduler()
+        logger.info("Background startup complete: DB seeded, scheduler started")
+    except Exception as e:
+        logger.error(f"Error in background startup: {e}")
+
+
+@app.on_event("startup")
+async def on_startup():
+    asyncio.create_task(_background_startup())
+    logger.info("FastAPI started - heavy init running in background")
 
 
 @app.get("/")
 def root():
-    return {"message": "BI Platform API - Gabriel Hoyos", "status": "online"}
+    return {"status": "ok"}
 
 
 @app.post("/api/sync/all")

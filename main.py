@@ -31,7 +31,7 @@ def run_streamlit():
 
 if __name__ == "__main__":
     if IS_DEPLOYMENT:
-        logger.info("Modo producción: FastAPI en puerto 5000 con scheduler y seed")
+        logger.info("Modo producción: FastAPI en puerto 5000")
         run_fastapi(port=5000)
     else:
         fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
