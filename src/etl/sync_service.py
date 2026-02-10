@@ -584,47 +584,27 @@ class SyncService:
             return data
 
         items = self._extract_items(data, "ventas")
+
+        cliente_cache = {}
+        for c in self.db.query(ClienteFinal).filter(ClienteFinal.tenant_id == self.tenant_id).all():
+            if c.obuma_id:
+                cliente_cache[c.obuma_id] = c.id
+
+        self.db.query(VentaHistorico).filter(VentaHistorico.tenant_id == self.tenant_id).delete()
+        self.db.commit()
+
         count = 0
         total_api = 0.0
+        batch_size = 2000
         for item in items:
             obuma_id = str(item.get("venta_id", item.get("id", "")))
 
             rel_cliente_id = str(item.get("rel_cliente_id", "0"))
-            cliente_db_id = None
-            if rel_cliente_id and rel_cliente_id != "0":
-                cliente = self.db.query(ClienteFinal).filter(
-                    ClienteFinal.obuma_id == rel_cliente_id,
-                    ClienteFinal.tenant_id == self.tenant_id
-                ).first()
-                if cliente:
-                    cliente_db_id = cliente.id
+            cliente_db_id = cliente_cache.get(rel_cliente_id)
 
             vendedor_id_val = str(item.get("rel_vendedor_id", "0"))
             if vendedor_id_val == "0":
                 vendedor_id_val = None
-
-            existing = self.db.query(VentaHistorico).filter(VentaHistorico.obuma_id == obuma_id).first()
-            if existing:
-                neto = self._safe_float(item.get("venta_neto", 0))
-                iva = self._safe_float(item.get("venta_iva", 0))
-                total = self._safe_float(item.get("venta_total", 0))
-                costo = self._safe_float(item.get("venta_costo", 0))
-                utilidad = self._safe_float(item.get("venta_utilidad", 0))
-                total_api += total
-
-                existing.subtotal = neto
-                existing.impuestos = iva
-                existing.total = total
-                existing.costo_total = costo
-                existing.margen_neto = utilidad if utilidad else (neto - costo)
-                existing.total_pagado = self._safe_float(item.get("venta_total_pagado", 0))
-                existing.total_por_pagar = self._safe_float(item.get("venta_total_por_pagar", 0))
-                existing.anulada = str(item.get("venta_anulada", "0")) == "1"
-                existing.detalle = self._to_json(item)
-                existing.cliente_id = cliente_db_id
-                existing.vendedor_id = vendedor_id_val
-                count += 1
-                continue
 
             fecha = self._parse_date(item.get("venta_fecha_ingreso", item.get("fecha", None)))
             tipo_dcto_code = str(item.get("venta_tipo_dcto", item.get("tipo_documento", "")))
@@ -636,7 +616,6 @@ class SyncService:
             costo = self._safe_float(item.get("venta_costo", item.get("costo_total", 0)))
             utilidad = self._safe_float(item.get("venta_utilidad", 0))
             total_api += total
-
             folio = str(item.get("venta_nro_dcto", item.get("folio", "")))
             anulada = str(item.get("venta_anulada", "0")) == "1"
             estado = "Anulada" if anulada else item.get("venta_estado", "Vigente")
@@ -663,6 +642,10 @@ class SyncService:
             )
             self.db.add(venta)
             count += 1
+
+            if count % batch_size == 0:
+                self.db.commit()
+                logger.info(f"Ventas sync progress: {count}/{len(items)}")
 
         self.db.commit()
         db_count = self.db.query(VentaHistorico).count()
