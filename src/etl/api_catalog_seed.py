@@ -213,16 +213,6 @@ API_CATALOG = [
                 "implementado": True,
                 "sync_habilitado": True,
             },
-            {
-                "nombre": "API : Compras DTE recibidos",
-                "endpoint_url": "/comprasDteRecibidos.list.json",
-                "metodo_http": "GET",
-                "descripcion": "Listar documentos tributarios electronicos (DTE) recibidos de proveedores",
-                "parametros": "Filtros de DTE recibidos",
-                "doc_url": "https://www.obuma.cl/ayuda/articulo/589/api--compras-dte-recibidos",
-                "implementado": True,
-                "sync_habilitado": True,
-            },
         ]
     },
     {
@@ -236,16 +226,6 @@ API_CATALOG = [
                 "descripcion": "Consultar libro diario de contabilidad con detalle de asientos contables",
                 "parametros": "mostrar_detalle=1, fecha_desde",
                 "doc_url": "https://www.obuma.cl/ayuda/articulo/418/api--contabilidad",
-                "implementado": True,
-                "sync_habilitado": True,
-            },
-            {
-                "nombre": "API : Compras GASTOS menores",
-                "endpoint_url": "/comprasGastosMenores.list.json",
-                "metodo_http": "GET",
-                "descripcion": "Listar gastos menores registrados en el modulo de compras",
-                "parametros": "Consultar documentacion",
-                "doc_url": "https://www.obuma.cl/ayuda/articulo/590/api--compras-gastos-menores",
                 "implementado": True,
                 "sync_habilitado": True,
             },

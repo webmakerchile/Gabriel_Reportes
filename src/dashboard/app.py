@@ -16,7 +16,7 @@ from src.models.models import (
     ClienteFinal, SyncLog, ReporteGenerado, ObumaApiEndpoint,
     Proveedor, ClienteContacto, ClienteDireccion, Empleado, Remuneracion,
     VentaItem, VentaCotizacion, VentaCobro, VentaDte, CompraOC, CompraPago,
-    CompraDteRecibido, GastoMenor, CrmLead, ProductoCategoria,
+    CrmLead, ProductoCategoria,
     ProductoSubCategoria, ProductoFabricante, ProductoPrecio, CostoHistorico
 )
 from src.etl.sync_service import SyncService
@@ -850,8 +850,8 @@ elif page == "Compras":
 
     db = get_db()
     try:
-        tab_compras, tab_oc, tab_pagos, tab_dte_rec, tab_gastos = st.tabs([
-            "Compras", "Ordenes de Compra", "Pagos", "DTE Recibidos", "Gastos Menores"
+        tab_compras, tab_oc, tab_pagos = st.tabs([
+            "Compras", "Ordenes de Compra", "Pagos"
         ])
 
         with tab_compras:
@@ -912,41 +912,6 @@ elif page == "Compras":
             else:
                 st.info("Sin pagos a proveedores. Sincronice con Obuma.")
 
-        with tab_dte_rec:
-            dtes = db.query(CompraDteRecibido).order_by(CompraDteRecibido.id.desc()).limit(200).all()
-            if dtes:
-                st.metric("Total DTE Recibidos", len(dtes))
-                data = [{
-                    "Tipo DTE": d.tipo_dcto or "-",
-                    "Folio": d.folio or "-",
-                    "Emisor": d.razon_social or "-",
-                    "Fecha": str(d.fecha)[:10] if d.fecha else "-",
-                    "Total": format_clp(d.monto_total),
-                } for d in dtes]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
-            else:
-                st.info("Sin DTE recibidos. Este endpoint puede no estar disponible en su cuenta Obuma.")
-
-        with tab_gastos:
-            gastos = db.query(GastoMenor).order_by(GastoMenor.id.desc()).limit(200).all()
-            if gastos:
-                total_gastos = sum(g.monto or 0 for g in gastos)
-                c1, c2 = st.columns(2)
-                with c1:
-                    render_metric("Total Gastos", str(len(gastos)), "📝")
-                with c2:
-                    render_metric("Monto Total", format_clp(total_gastos), "💵", ACCENT_AMBER)
-
-                st.markdown("")
-                data = [{
-                    "Fecha": str(g.fecha)[:10] if g.fecha else "-",
-                    "Descripcion": g.descripcion or "-",
-                    "Monto": format_clp(g.monto),
-                    "Categoria": g.categoria or "-",
-                } for g in gastos]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
-            else:
-                st.info("Sin gastos menores. Este endpoint puede no estar disponible en su cuenta Obuma.")
     finally:
         db.close()
 
@@ -1383,9 +1348,7 @@ elif page == "Auditoria":
                 ("Compras", db.query(CompraHistorico).count(), "compras.list.json"),
                 ("Ordenes Compra", db.query(CompraOC).count(), "comprasOc.list.json"),
                 ("Pagos Proveedores", db.query(CompraPago).count(), "comprasPagos.list.json"),
-                ("DTE Recibidos", db.query(CompraDteRecibido).count(), "comprasDteRecibidos.list.json"),
                 ("Contabilidad", db.query(ContabilidadHistorico).count(), "contabilidad.listDiario.json"),
-                ("Gastos Menores", db.query(GastoMenor).count(), "comprasGastosMenores.list.json"),
                 ("CRM Leads", db.query(CrmLead).count(), "crm.list.json"),
                 ("Costos Historicos", db.query(CostoHistorico).count(), "-"),
             ]

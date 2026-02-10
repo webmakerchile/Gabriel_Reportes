@@ -9,7 +9,7 @@ from src.models.models import (
     CostoHistorico, ClienteFinal, SyncLog, Tenant, ObumaApiEndpoint,
     Proveedor, ClienteContacto, ClienteDireccion, Empleado, Remuneracion,
     VentaItem, VentaCotizacion, VentaCobro, VentaDte,
-    CompraOC, CompraPago, CompraDteRecibido, GastoMenor, CrmLead,
+    CompraOC, CompraPago, CrmLead,
     ProductoCategoria, ProductoSubCategoria, ProductoFabricante, ProductoPrecio
 )
 
@@ -863,33 +863,6 @@ class SyncService:
         self._log_sync("compras_pagos", len(items), count, 0)
         return {"synced": count, "total_api": len(items), "total_db": count}
 
-    async def sync_compras_dte_recibidos(self) -> dict:
-        data = await self.client.get_compras_dte_recibidos()
-        if isinstance(data, dict) and "error" in data:
-            self._log_sync("compras_dte_recibidos", 0, 0, 0, estado="error", detalle=str(data.get("error")))
-            return data
-
-        items = self._extract_items(data, "dte", "compras_dte_recibidos")
-        self.db.query(CompraDteRecibido).filter(CompraDteRecibido.tenant_id == self.tenant_id).delete()
-        count = 0
-        for item in items:
-            dte = CompraDteRecibido(
-                tenant_id=self.tenant_id,
-                obuma_id=self._safe_str(item.get("dte_id", item.get("id"))),
-                tipo_dcto=self._safe_str(item.get("dte_tipo_dcto", item.get("tipo_dcto"))),
-                folio=self._safe_str(item.get("dte_folio", item.get("folio"))),
-                fecha=self._parse_date(item.get("dte_fecha", item.get("fecha"))),
-                rut_emisor=self._safe_str(item.get("dte_rut_emisor", item.get("rut_emisor"))),
-                razon_social=self._safe_str(item.get("dte_razon_social", item.get("razon_social"))),
-                monto_total=self._safe_float(item.get("dte_monto_total", item.get("monto_total", 0))),
-                data_json=self._to_json(item),
-            )
-            self.db.add(dte)
-            count += 1
-
-        self.db.commit()
-        self._log_sync("compras_dte_recibidos", len(items), count, 0)
-        return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_contabilidad(self, fecha_desde: str = None) -> dict:
         data = await self.client.get_contabilidad(fecha_desde)
@@ -919,31 +892,6 @@ class SyncService:
         self._log_sync("contabilidad", len(items), db_count, 0)
         return {"synced": count, "total_api": len(items), "total_db": db_count}
 
-    async def sync_gastos_menores(self) -> dict:
-        data = await self.client.get_gastos_menores()
-        if isinstance(data, dict) and "error" in data:
-            self._log_sync("gastos_menores", 0, 0, 0, estado="error", detalle=str(data.get("error")))
-            return data
-
-        items = self._extract_items(data, "gastos", "gastos_menores", "comprasGastosMenores")
-        self.db.query(GastoMenor).filter(GastoMenor.tenant_id == self.tenant_id).delete()
-        count = 0
-        for item in items:
-            gasto = GastoMenor(
-                tenant_id=self.tenant_id,
-                obuma_id=self._safe_str(item.get("gasto_id", item.get("id"))),
-                fecha=self._parse_date(item.get("gasto_fecha", item.get("fecha"))),
-                descripcion=self._safe_str(item.get("gasto_descripcion", item.get("descripcion"))),
-                monto=self._safe_float(item.get("gasto_monto", item.get("monto", 0))),
-                categoria=self._safe_str(item.get("gasto_categoria", item.get("categoria"))),
-                data_json=self._to_json(item),
-            )
-            self.db.add(gasto)
-            count += 1
-
-        self.db.commit()
-        self._log_sync("gastos_menores", len(items), count, 0)
-        return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_crm_leads(self) -> dict:
         data = await self.client.get_crm_leads()
@@ -995,9 +943,7 @@ class SyncService:
         results["compras"] = await self.sync_compras()
         results["compras_oc"] = await self.sync_compras_oc()
         results["compras_pagos"] = await self.sync_compras_pagos()
-        results["compras_dte_recibidos"] = await self.sync_compras_dte_recibidos()
         results["contabilidad"] = await self.sync_contabilidad()
-        results["gastos_menores"] = await self.sync_gastos_menores()
         results["crm_leads"] = await self.sync_crm_leads()
         return results
 
