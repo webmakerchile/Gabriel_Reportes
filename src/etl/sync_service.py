@@ -159,20 +159,22 @@ class SyncService:
             ciudad = item.get("cliente_ciudad", "")
 
             is_valid_rut = bool(rut_raw and re.match(r'^\d{1,2}\.\d{3}\.\d{3}-[\dkK]$', rut_raw))
-            unique_rut = rut_raw if is_valid_rut else f"OBU-{obuma_id}"
 
             existing = self.db.query(ClienteFinal).filter(
                 ClienteFinal.obuma_id == obuma_id,
                 ClienteFinal.tenant_id == self.tenant_id
             ).first()
 
-            if not existing:
-                existing = self.db.query(ClienteFinal).filter(
-                    ClienteFinal.rut == unique_rut,
-                    ClienteFinal.tenant_id == self.tenant_id
-                ).first()
-
             if existing:
+                if is_valid_rut:
+                    rut_owner = self.db.query(ClienteFinal).filter(
+                        ClienteFinal.rut == rut_raw,
+                        ClienteFinal.tenant_id == self.tenant_id,
+                        ClienteFinal.obuma_id != obuma_id
+                    ).first()
+                    unique_rut = rut_raw if not rut_owner else f"OBU-{obuma_id}"
+                else:
+                    unique_rut = existing.rut if existing.rut else f"OBU-{obuma_id}"
                 existing.nombre = nombre or existing.nombre
                 existing.email = email or existing.email
                 existing.telefono = telefono or existing.telefono
@@ -184,6 +186,14 @@ class SyncService:
                 existing.rut = unique_rut
                 existing.data_json = self._to_json(item)
             else:
+                unique_rut = f"OBU-{obuma_id}"
+                if is_valid_rut:
+                    rut_owner = self.db.query(ClienteFinal).filter(
+                        ClienteFinal.rut == rut_raw,
+                        ClienteFinal.tenant_id == self.tenant_id
+                    ).first()
+                    if not rut_owner:
+                        unique_rut = rut_raw
                 cliente = ClienteFinal(
                     tenant_id=self.tenant_id,
                     rut=unique_rut,
@@ -198,6 +208,13 @@ class SyncService:
                     data_json=self._to_json(item),
                 )
                 self.db.add(cliente)
+                try:
+                    self.db.flush()
+                except Exception:
+                    self.db.rollback()
+                    cliente.rut = f"OBU-{obuma_id}"
+                    self.db.add(cliente)
+                    self.db.flush()
             count += 1
 
         try:
