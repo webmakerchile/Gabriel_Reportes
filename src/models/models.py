@@ -83,6 +83,7 @@ class VentaHistorico(Base):
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
     obuma_id = Column(String(50), nullable=True)
     cliente_id = Column(Integer, ForeignKey("clientes_finales.id"), nullable=True)
+    vendedor_id = Column(String(50), nullable=True)
     fecha = Column(DateTime, nullable=True)
     tipo_documento = Column(String(50), nullable=True)
     folio = Column(String(50), nullable=True)

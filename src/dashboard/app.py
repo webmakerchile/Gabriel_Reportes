@@ -21,9 +21,17 @@ from src.models.models import (
 )
 from src.etl.sync_service import SyncService
 from src.etl.obuma_client import ObumaClient
-from src.reports.excel_generator import generate_daily_report
+from src.reports.excel_generator import generate_vendedor_report, generate_all_vendedor_reports
 
 Base.metadata.create_all(bind=engine)
+
+from sqlalchemy import inspect, text
+_inspector = inspect(engine)
+_columns = [c['name'] for c in _inspector.get_columns('ventas_historico')]
+if 'vendedor_id' not in _columns:
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE ventas_historico ADD COLUMN vendedor_id VARCHAR(50)"))
+        conn.commit()
 
 st.set_page_config(
     page_title="BI Platform - Gabriel Hoyos",
@@ -1097,35 +1105,77 @@ elif page == "API Obuma":
 # REPORTES
 # ============================================================
 elif page == "Reportes":
-    st.markdown('<p class="page-title">Reportes Excel</p>', unsafe_allow_html=True)
-    st.markdown('<p class="page-subtitle">Generacion y descarga de reportes profesionales</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-title">Reportes Excel - Evolucion por Vendedor</p>', unsafe_allow_html=True)
+    st.markdown('<p class="page-subtitle">Reportes de ventas por vendedor con segmentacion ABC y nivel de riesgo</p>', unsafe_allow_html=True)
 
     db = get_db()
     try:
-        st.markdown('<p class="section-header">Generar Nuevo Reporte</p>', unsafe_allow_html=True)
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            fecha_reporte = st.date_input("Fecha del reporte", value=date.today())
-        with col2:
-            st.write("")
-            st.write("")
-            if st.button("Generar Reporte", type="primary", use_container_width=True):
-                with st.spinner("Generando reporte Excel..."):
-                    filepath = generate_daily_report(db, fecha_reporte)
-                    st.success("Reporte generado exitosamente")
-                    with open(filepath, "rb") as f:
-                        st.download_button(
-                            label="Descargar Reporte",
-                            data=f.read(),
-                            file_name=os.path.basename(filepath),
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                        )
+        from src.models.models import Empleado
+        vendedores = db.query(Empleado).order_by(Empleado.nombre).all()
+
+        st.markdown('<p class="section-header">Generar Reportes por Vendedor</p>', unsafe_allow_html=True)
+
+        tab_individual, tab_todos = st.tabs(["Reporte Individual", "Todos los Vendedores"])
+
+        with tab_individual:
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                vendedor_options = {f"{v.nombre} ({v.cargo or 'Sin cargo'})": v.obuma_id for v in vendedores}
+                vendedor_sel = st.selectbox("Seleccionar Vendedor", list(vendedor_options.keys()))
+            with col2:
+                year_report = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030)
+            with col3:
+                st.write("")
+                st.write("")
+                if st.button("Generar", type="primary", use_container_width=True, key="gen_individual"):
+                    vendedor_obuma_id = vendedor_options[vendedor_sel]
+                    with st.spinner(f"Generando reporte para {vendedor_sel}..."):
+                        try:
+                            filepath = generate_vendedor_report(db, vendedor_obuma_id, int(year_report))
+                            if filepath:
+                                st.success(f"Reporte generado: {os.path.basename(filepath)}")
+                                with open(filepath, "rb") as f:
+                                    st.download_button(
+                                        label="Descargar Reporte",
+                                        data=f.read(),
+                                        file_name=os.path.basename(filepath),
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        use_container_width=True,
+                                        key="dl_individual"
+                                    )
+                            else:
+                                st.warning("Este vendedor no tiene ventas registradas.")
+                        except Exception as e:
+                            st.error(f"Error generando reporte: {str(e)}")
+
+        with tab_todos:
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                year_all = st.number_input("Ano", value=date.today().year, min_value=2020, max_value=2030, key="year_all")
+            with col2:
+                st.write("")
+                st.write("")
+                if st.button("Generar Todos", type="primary", use_container_width=True, key="gen_all"):
+                    with st.spinner("Generando reportes para todos los vendedores..."):
+                        try:
+                            filepaths = generate_all_vendedor_reports(db, int(year_all))
+                            st.success(f"Se generaron {len(filepaths)} reportes")
+                            for fp in filepaths:
+                                with open(fp, "rb") as f:
+                                    st.download_button(
+                                        label=f"Descargar {os.path.basename(fp)}",
+                                        data=f.read(),
+                                        file_name=os.path.basename(fp),
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        key=f"dl_all_{os.path.basename(fp)}"
+                                    )
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
 
         st.markdown("---")
-        st.markdown('<p class="section-header">Reportes Historicos</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-header">Reportes Generados</p>', unsafe_allow_html=True)
 
-        reportes = db.query(ReporteGenerado).order_by(ReporteGenerado.generado_at.desc()).all()
+        reportes = db.query(ReporteGenerado).order_by(ReporteGenerado.generado_at.desc()).limit(50).all()
         if reportes:
             for r in reportes:
                 col1, col2, col3 = st.columns([4, 3, 1])
@@ -1143,7 +1193,7 @@ elif page == "Reportes":
                 else:
                     col3.write("N/A")
         else:
-            st.info("No se han generado reportes aun.")
+            st.info("No se han generado reportes aun. Use los botones de arriba para generar.")
     finally:
         db.close()
 

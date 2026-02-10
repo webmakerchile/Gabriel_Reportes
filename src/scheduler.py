@@ -5,13 +5,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from src.database import SessionLocal
 from src.etl.sync_service import SyncService
-from src.reports.excel_generator import generate_daily_report
+from src.reports.excel_generator import generate_all_vendedor_reports
 
 logger = logging.getLogger(__name__)
 
 
 def scheduled_sync_and_report():
-    logger.info("Ejecutando sincronización y generación de reporte programado...")
+    logger.info("Ejecutando sincronización y generación de reportes programados...")
     db = SessionLocal()
     try:
         service = SyncService(db)
@@ -21,8 +21,10 @@ def scheduled_sync_and_report():
         loop.close()
         logger.info(f"Sincronización completada: {results}")
 
-        filepath = generate_daily_report(db, date.today())
-        logger.info(f"Reporte diario generado: {filepath}")
+        filepaths = generate_all_vendedor_reports(db, date.today().year)
+        logger.info(f"Reportes por vendedor generados: {len(filepaths)} archivos")
+        for fp in filepaths:
+            logger.info(f"  -> {fp}")
     except Exception as e:
         logger.error(f"Error en tarea programada: {e}")
     finally:

@@ -589,6 +589,20 @@ class SyncService:
         for item in items:
             obuma_id = str(item.get("venta_id", item.get("id", "")))
 
+            rel_cliente_id = str(item.get("rel_cliente_id", "0"))
+            cliente_db_id = None
+            if rel_cliente_id and rel_cliente_id != "0":
+                cliente = self.db.query(ClienteFinal).filter(
+                    ClienteFinal.obuma_id == rel_cliente_id,
+                    ClienteFinal.tenant_id == self.tenant_id
+                ).first()
+                if cliente:
+                    cliente_db_id = cliente.id
+
+            vendedor_id_val = str(item.get("rel_vendedor_id", "0"))
+            if vendedor_id_val == "0":
+                vendedor_id_val = None
+
             existing = self.db.query(VentaHistorico).filter(VentaHistorico.obuma_id == obuma_id).first()
             if existing:
                 neto = self._safe_float(item.get("venta_neto", 0))
@@ -607,6 +621,8 @@ class SyncService:
                 existing.total_por_pagar = self._safe_float(item.get("venta_total_por_pagar", 0))
                 existing.anulada = str(item.get("venta_anulada", "0")) == "1"
                 existing.detalle = self._to_json(item)
+                existing.cliente_id = cliente_db_id
+                existing.vendedor_id = vendedor_id_val
                 count += 1
                 continue
 
@@ -621,10 +637,6 @@ class SyncService:
             utilidad = self._safe_float(item.get("venta_utilidad", 0))
             total_api += total
 
-            cliente_rut = item.get("cliente_rut", item.get("rut", None))
-            cliente_nombre = item.get("cliente_razon_social", item.get("cliente_nombre", ""))
-            cliente_id = self._get_or_create_cliente(cliente_rut, cliente_nombre)
-
             folio = str(item.get("venta_nro_dcto", item.get("folio", "")))
             anulada = str(item.get("venta_anulada", "0")) == "1"
             estado = "Anulada" if anulada else item.get("venta_estado", "Vigente")
@@ -632,7 +644,8 @@ class SyncService:
             venta = VentaHistorico(
                 tenant_id=self.tenant_id,
                 obuma_id=obuma_id,
-                cliente_id=cliente_id,
+                cliente_id=cliente_db_id,
+                vendedor_id=vendedor_id_val,
                 fecha=fecha,
                 tipo_documento=tipo_dcto,
                 folio=folio,

@@ -12,7 +12,7 @@ from src.models.models import (
     ClienteFinal, SyncLog, ReporteGenerado
 )
 from src.etl.sync_service import SyncService
-from src.reports.excel_generator import generate_daily_report
+from src.reports.excel_generator import generate_all_vendedor_reports
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,6 +27,13 @@ app = FastAPI(
 def _heavy_init():
     try:
         Base.metadata.create_all(bind=engine)
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        columns = [c['name'] for c in inspector.get_columns('ventas_historico')]
+        if 'vendedor_id' not in columns:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE ventas_historico ADD COLUMN vendedor_id VARCHAR(50)"))
+                conn.commit()
         from src.etl.api_catalog_seed import seed_api_catalog
         from src.scheduler import start_scheduler
         db = SessionLocal()
@@ -233,11 +240,13 @@ def dashboard_resumen(db: Session = Depends(get_db)):
 
 @app.post("/api/reportes/generar")
 def generar_reporte(
-    fecha: date = None,
+    year: int = None,
     db: Session = Depends(get_db)
 ):
-    filepath = generate_daily_report(db, fecha)
-    return {"status": "generated", "filepath": filepath}
+    if year is None:
+        year = date.today().year
+    filepaths = generate_all_vendedor_reports(db, year)
+    return {"status": "generated", "count": len(filepaths), "filepaths": filepaths}
 
 
 @app.get("/api/reportes")

@@ -1,12 +1,14 @@
 import os
+import json
 import logging
 from datetime import datetime, date
+from collections import defaultdict
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from src.models.models import VentaHistorico, CompraHistorico, Producto, ReporteGenerado, ClienteFinal
+from sqlalchemy import func, extract, distinct
+from src.models.models import VentaHistorico, ClienteFinal, Empleado, ReporteGenerado
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +16,7 @@ HEADER_FONT = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
 HEADER_FILL = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
 HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
 CURRENCY_FORMAT = '#,##0'
+PERCENT_FORMAT = '0.00%'
 THIN_BORDER = Border(
     left=Side(style='thin'),
     right=Side(style='thin'),
@@ -22,6 +25,9 @@ THIN_BORDER = Border(
 )
 TITLE_FONT = Font(name="Calibri", bold=True, size=14, color="2F5496")
 SUBTITLE_FONT = Font(name="Calibri", bold=True, size=11, color="404040")
+
+MONTH_NAMES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+               "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
 
 
 def _style_header(ws, row, col_count):
@@ -43,126 +49,288 @@ def _auto_width(ws):
         ws.column_dimensions[col_letter].width = min(max_length + 4, 40)
 
 
+def _get_last_3_months(today):
+    months = []
+    year = today.year
+    month = today.month
+    for _ in range(3):
+        month -= 1
+        if month <= 0:
+            month = 12
+            year -= 1
+        months.append(month)
+    return months
+
+
+def _classify_segmento(acumulado_pct):
+    if acumulado_pct <= 0.80:
+        return "A"
+    elif acumulado_pct <= 0.95:
+        return "B"
+    elif acumulado_pct <= 0.99:
+        return "C"
+    else:
+        return "D"
+
+
+def _classify_riesgo(meses_con_venta, ventas_ultimos_3):
+    if meses_con_venta >= 8:
+        return "BAJO"
+    if meses_con_venta >= 6 and ventas_ultimos_3 > 0:
+        return "BAJO"
+    if meses_con_venta >= 3 and ventas_ultimos_3 > 0:
+        return "MEDIO"
+    return "ALTO"
+
+
+def generate_vendedor_report(db: Session, vendedor_obuma_id: str, year: int = None) -> str:
+    if year is None:
+        year = date.today().year
+
+    today = date.today()
+    last_3_months = _get_last_3_months(today)
+
+    empleado = db.query(Empleado).filter(Empleado.obuma_id == vendedor_obuma_id).first()
+    if not empleado:
+        logger.warning(f"Empleado not found for obuma_id: {vendedor_obuma_id}")
+        return None
+
+    ventas = db.query(VentaHistorico).filter(
+        VentaHistorico.vendedor_id == vendedor_obuma_id,
+        VentaHistorico.anulada != True,
+        extract('year', VentaHistorico.fecha) == year
+    ).all()
+
+    if not ventas:
+        logger.info(f"No sales found for vendedor {empleado.nombre} ({vendedor_obuma_id}) in {year}")
+        return None
+
+    client_data = defaultdict(lambda: defaultdict(float))
+    client_info = {}
+
+    for v in ventas:
+        ckey = None
+        if v.cliente_id:
+            ckey = f"db_{v.cliente_id}"
+            if ckey not in client_info:
+                cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
+                if cliente:
+                    client_info[ckey] = {'rut': cliente.rut or '', 'nombre': cliente.nombre or ''}
+                else:
+                    client_info[ckey] = {'rut': '', 'nombre': ''}
+        else:
+            try:
+                detalle = json.loads(v.detalle) if v.detalle else {}
+            except (json.JSONDecodeError, TypeError):
+                detalle = {}
+            rel_id = str(detalle.get('rel_cliente_id', '0'))
+            if rel_id and rel_id != '0':
+                ckey = f"obuma_{rel_id}"
+                if ckey not in client_info:
+                    cliente = db.query(ClienteFinal).filter(ClienteFinal.obuma_id == rel_id).first()
+                    if cliente:
+                        client_info[ckey] = {'rut': cliente.rut or '', 'nombre': cliente.nombre or ''}
+                    else:
+                        client_info[ckey] = {'rut': f'ID-{rel_id}', 'nombre': detalle.get('cliente_razon_social', f'Cliente {rel_id}')}
+            else:
+                continue
+
+        if ckey and v.fecha:
+            month = v.fecha.month
+            client_data[ckey][month] += (v.subtotal or 0)
+
+    rows = []
+    for cid, monthly in client_data.items():
+        info = client_info.get(cid, {'rut': '', 'nombre': ''})
+        month_values = [monthly.get(m, 0) for m in range(1, 13)]
+        total = sum(month_values)
+        meses_con_venta = sum(1 for v in month_values if v > 0)
+        ventas_ultimos_3 = sum(monthly.get(m, 0) for m in last_3_months)
+
+        rows.append({
+            'rut': info['rut'],
+            'nombre': info['nombre'],
+            'months': month_values,
+            'total': total,
+            'meses_con_venta': meses_con_venta,
+            'ventas_ultimos_3': ventas_ultimos_3,
+        })
+
+    rows.sort(key=lambda r: r['total'], reverse=True)
+
+    grand_total = sum(r['total'] for r in rows)
+
+    acumulado = 0
+    for r in rows:
+        pct_venta = r['total'] / grand_total if grand_total > 0 else 0
+        acumulado += pct_venta
+        r['pct_venta'] = pct_venta
+        r['pct_acumulado'] = acumulado
+        r['segmento'] = _classify_segmento(acumulado)
+        r['nivel_riesgo'] = _classify_riesgo(r['meses_con_venta'], r['ventas_ultimos_3'])
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Reporte-Ventas-EvolucionPorClie"
+
+    headers = [
+        "N°", "CLIENTE Rut", "CLIENTE Razon Social", "CLIENTE Tipo",
+        "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+        "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
+        "TOTAL", "% Acumulado", "Segmento", "% de la venta",
+        "Meses con venta", "Ventas últimos 3 meses", "Nivel de Riesgo"
+    ]
+
+    for i, h in enumerate(headers, 1):
+        ws.cell(row=1, column=i, value=h)
+    _style_header(ws, 1, len(headers))
+
+    for idx, r in enumerate(rows, 1):
+        row_num = idx + 1
+        ws.cell(row=row_num, column=1, value=idx).border = THIN_BORDER
+        ws.cell(row=row_num, column=2, value=r['rut']).border = THIN_BORDER
+        ws.cell(row=row_num, column=3, value=r['nombre']).border = THIN_BORDER
+        ws.cell(row=row_num, column=4, value="Distribuidor").border = THIN_BORDER
+
+        for m in range(12):
+            cell = ws.cell(row=row_num, column=5 + m, value=r['months'][m])
+            cell.number_format = CURRENCY_FORMAT
+            cell.border = THIN_BORDER
+
+        cell = ws.cell(row=row_num, column=17, value=r['total'])
+        cell.number_format = CURRENCY_FORMAT
+        cell.border = THIN_BORDER
+
+        cell = ws.cell(row=row_num, column=18, value=r['pct_acumulado'])
+        cell.number_format = PERCENT_FORMAT
+        cell.border = THIN_BORDER
+
+        ws.cell(row=row_num, column=19, value=r['segmento']).border = THIN_BORDER
+
+        cell = ws.cell(row=row_num, column=20, value=r['pct_venta'])
+        cell.number_format = PERCENT_FORMAT
+        cell.border = THIN_BORDER
+
+        ws.cell(row=row_num, column=21, value=r['meses_con_venta']).border = THIN_BORDER
+
+        cell = ws.cell(row=row_num, column=22, value=r['ventas_ultimos_3'])
+        cell.number_format = CURRENCY_FORMAT
+        cell.border = THIN_BORDER
+
+        ws.cell(row=row_num, column=23, value=r['nivel_riesgo']).border = THIN_BORDER
+
+    _auto_width(ws)
+
+    os.makedirs("reports", exist_ok=True)
+    vendedor_rut = (empleado.rut or vendedor_obuma_id).replace(".", "").replace("-", "")
+    filename = f"vendedor_{vendedor_rut}_{date.today().strftime('%Y%m%d')}.xlsx"
+    filepath = os.path.join("reports", filename)
+    wb.save(filepath)
+
+    reporte = ReporteGenerado(
+        nombre_archivo=filename,
+        tipo="vendedor",
+        fecha_reporte=date.today(),
+        ruta_archivo=filepath,
+    )
+    db.add(reporte)
+    db.commit()
+
+    logger.info(f"Vendedor report generated: {filepath} ({empleado.nombre})")
+    return filepath
+
+
+def generate_all_vendedor_reports(db: Session, year: int = None) -> list:
+    if year is None:
+        year = date.today().year
+
+    vendedor_ids = db.query(distinct(VentaHistorico.vendedor_id)).filter(
+        VentaHistorico.vendedor_id != None,
+        VentaHistorico.anulada != True,
+        extract('year', VentaHistorico.fecha) == year
+    ).all()
+
+    vendedor_ids = [vid[0] for vid in vendedor_ids if vid[0]]
+
+    filepaths = []
+    for vid in vendedor_ids:
+        try:
+            fp = generate_vendedor_report(db, vid, year)
+            if fp:
+                filepaths.append(fp)
+        except Exception as e:
+            logger.error(f"Error generating report for vendedor {vid}: {e}")
+
+    logger.info(f"Generated {len(filepaths)} vendedor reports for year {year}")
+    return filepaths
+
+
 def generate_daily_report(db: Session, report_date: date = None) -> str:
     if report_date is None:
         report_date = date.today()
 
+    year = report_date.year
+    filepaths = generate_all_vendedor_reports(db, year)
+
     wb = Workbook()
+    ws = wb.active
+    ws.title = "Resumen Consolidado"
 
-    ws_resumen = wb.active
-    ws_resumen.title = "Resumen de Ventas"
-    ws_resumen.cell(row=1, column=1, value="Reporte Diario - Gabriel Hoyos").font = TITLE_FONT
-    ws_resumen.cell(row=2, column=1, value=f"Fecha: {report_date.strftime('%d/%m/%Y')}").font = SUBTITLE_FONT
-    ws_resumen.merge_cells("A1:F1")
-    ws_resumen.merge_cells("A2:F2")
+    ws.cell(row=1, column=1, value="Reporte Consolidado de Vendedores").font = TITLE_FONT
+    ws.cell(row=2, column=1, value=f"Fecha: {report_date.strftime('%d/%m/%Y')} - Año: {year}").font = SUBTITLE_FONT
+    ws.merge_cells("A1:D1")
+    ws.merge_cells("A2:D2")
 
-    headers_ventas = ["Cliente", "Folio", "Tipo Doc.", "Neto", "IVA", "Total", "Costo", "Margen"]
-    row_start = 4
-    for i, h in enumerate(headers_ventas, 1):
-        ws_resumen.cell(row=row_start, column=i, value=h)
-    _style_header(ws_resumen, row_start, len(headers_ventas))
+    headers = ["Vendedor", "RUT", "Clientes", "Venta Total Neto"]
+    for i, h in enumerate(headers, 1):
+        ws.cell(row=4, column=i, value=h)
+    _style_header(ws, 4, len(headers))
 
-    ventas = db.query(VentaHistorico).filter(
-        func.date(VentaHistorico.fecha) == report_date
+    vendedor_ids = db.query(distinct(VentaHistorico.vendedor_id)).filter(
+        VentaHistorico.vendedor_id != None,
+        VentaHistorico.anulada != True,
+        extract('year', VentaHistorico.fecha) == year
     ).all()
+    vendedor_ids = [vid[0] for vid in vendedor_ids if vid[0]]
 
-    row = row_start + 1
-    total_neto = 0
-    total_iva = 0
-    total_total = 0
-    total_costo = 0
-    total_margen = 0
+    row = 5
+    total_general = 0
+    for vid in vendedor_ids:
+        empleado = db.query(Empleado).filter(Empleado.obuma_id == vid).first()
+        if not empleado:
+            continue
 
-    for v in ventas:
-        cliente_nombre = ""
-        if v.cliente_id:
-            cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
-            cliente_nombre = cliente.nombre if cliente else ""
+        stats = db.query(
+            func.count(distinct(VentaHistorico.cliente_id)),
+            func.sum(VentaHistorico.subtotal)
+        ).filter(
+            VentaHistorico.vendedor_id == vid,
+            VentaHistorico.anulada != True,
+            extract('year', VentaHistorico.fecha) == year
+        ).first()
 
-        ws_resumen.cell(row=row, column=1, value=cliente_nombre)
-        ws_resumen.cell(row=row, column=2, value=v.folio)
-        ws_resumen.cell(row=row, column=3, value=v.tipo_documento)
-        ws_resumen.cell(row=row, column=4, value=v.subtotal or 0).number_format = CURRENCY_FORMAT
-        ws_resumen.cell(row=row, column=5, value=v.impuestos or 0).number_format = CURRENCY_FORMAT
-        ws_resumen.cell(row=row, column=6, value=v.total or 0).number_format = CURRENCY_FORMAT
-        ws_resumen.cell(row=row, column=7, value=v.costo_total or 0).number_format = CURRENCY_FORMAT
-        ws_resumen.cell(row=row, column=8, value=v.margen_neto or 0).number_format = CURRENCY_FORMAT
+        num_clientes = stats[0] or 0
+        total_neto = stats[1] or 0
 
-        for col in range(1, len(headers_ventas) + 1):
-            ws_resumen.cell(row=row, column=col).border = THIN_BORDER
+        ws.cell(row=row, column=1, value=empleado.nombre or '').border = THIN_BORDER
+        ws.cell(row=row, column=2, value=empleado.rut or '').border = THIN_BORDER
+        ws.cell(row=row, column=3, value=num_clientes).border = THIN_BORDER
+        cell = ws.cell(row=row, column=4, value=total_neto)
+        cell.number_format = CURRENCY_FORMAT
+        cell.border = THIN_BORDER
 
-        total_neto += v.subtotal or 0
-        total_iva += v.impuestos or 0
-        total_total += v.total or 0
-        total_costo += v.costo_total or 0
-        total_margen += v.margen_neto or 0
+        total_general += total_neto
         row += 1
 
     row += 1
-    ws_resumen.cell(row=row, column=3, value="TOTALES").font = Font(bold=True)
-    ws_resumen.cell(row=row, column=4, value=total_neto).number_format = CURRENCY_FORMAT
-    ws_resumen.cell(row=row, column=5, value=total_iva).number_format = CURRENCY_FORMAT
-    ws_resumen.cell(row=row, column=6, value=total_total).number_format = CURRENCY_FORMAT
-    ws_resumen.cell(row=row, column=7, value=total_costo).number_format = CURRENCY_FORMAT
-    ws_resumen.cell(row=row, column=8, value=total_margen).number_format = CURRENCY_FORMAT
-    for col in range(3, len(headers_ventas) + 1):
-        ws_resumen.cell(row=row, column=col).font = Font(bold=True)
-        ws_resumen.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=3, value="TOTAL GENERAL").font = Font(bold=True)
+    ws.cell(row=row, column=3).border = THIN_BORDER
+    cell = ws.cell(row=row, column=4, value=total_general)
+    cell.number_format = CURRENCY_FORMAT
+    cell.font = Font(bold=True)
+    cell.border = THIN_BORDER
 
-    _auto_width(ws_resumen)
-
-    ws_utilidad = wb.create_sheet("Utilidad Neta")
-    ws_utilidad.cell(row=1, column=1, value="Utilidad Neta del Día").font = TITLE_FONT
-    ws_utilidad.cell(row=2, column=1, value=f"Fecha: {report_date.strftime('%d/%m/%Y')}").font = SUBTITLE_FONT
-    ws_utilidad.merge_cells("A1:D1")
-
-    headers_util = ["Concepto", "Monto ($)"]
-    for i, h in enumerate(headers_util, 1):
-        ws_utilidad.cell(row=4, column=i, value=h)
-    _style_header(ws_utilidad, 4, len(headers_util))
-
-    datos_utilidad = [
-        ("Ingresos por Ventas (Neto)", total_neto),
-        ("Costo de Ventas", total_costo),
-        ("Utilidad Bruta", total_neto - total_costo),
-        ("Margen Bruto (%)", f"{((total_neto - total_costo) / total_neto * 100) if total_neto else 0:.1f}%"),
-    ]
-    for i, (concepto, monto) in enumerate(datos_utilidad, 5):
-        ws_utilidad.cell(row=i, column=1, value=concepto)
-        cell = ws_utilidad.cell(row=i, column=2, value=monto)
-        if isinstance(monto, (int, float)):
-            cell.number_format = CURRENCY_FORMAT
-        ws_utilidad.cell(row=i, column=1).border = THIN_BORDER
-        ws_utilidad.cell(row=i, column=2).border = THIN_BORDER
-
-    _auto_width(ws_utilidad)
-
-    ws_stock = wb.create_sheet("Alertas de Stock")
-    ws_stock.cell(row=1, column=1, value="Alertas de Stock Bajo").font = TITLE_FONT
-    ws_stock.merge_cells("A1:D1")
-
-    headers_stock = ["Producto", "SKU", "Stock Actual", "Stock Mínimo"]
-    for i, h in enumerate(headers_stock, 1):
-        ws_stock.cell(row=3, column=i, value=h)
-    _style_header(ws_stock, 3, len(headers_stock))
-
-    productos_bajo_stock = db.query(Producto).filter(
-        Producto.stock_actual <= Producto.stock_minimo,
-        Producto.activo == True
-    ).all()
-
-    for i, p in enumerate(productos_bajo_stock, 4):
-        ws_stock.cell(row=i, column=1, value=p.nombre)
-        ws_stock.cell(row=i, column=2, value=p.sku)
-        ws_stock.cell(row=i, column=3, value=p.stock_actual)
-        ws_stock.cell(row=i, column=4, value=p.stock_minimo)
-        for col in range(1, 5):
-            ws_stock.cell(row=i, column=col).border = THIN_BORDER
-
-    if not productos_bajo_stock:
-        ws_stock.cell(row=4, column=1, value="No hay productos con stock bajo")
-
-    _auto_width(ws_stock)
+    _auto_width(ws)
 
     os.makedirs("reports", exist_ok=True)
     filename = f"reporte_diario_{report_date.strftime('%Y%m%d')}.xlsx"
@@ -178,5 +346,5 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
     db.add(reporte)
     db.commit()
 
-    logger.info(f"Reporte generado: {filepath}")
+    logger.info(f"Daily consolidated report generated: {filepath} with {len(filepaths)} vendedor reports")
     return filepath
