@@ -578,7 +578,7 @@ class SyncService:
         return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_ventas(self) -> dict:
-        data = await self.client.get_ventas()
+        data = await self.client.get_ventas_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
@@ -675,7 +675,7 @@ class SyncService:
         return {"synced": count, "total_api": len(items), "total_db": db_count}
 
     async def sync_ventas_items(self) -> dict:
-        data = await self.client.get_ventas_items()
+        data = await self.client.get_ventas_items_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas_items", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
@@ -704,7 +704,7 @@ class SyncService:
         return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_ventas_cotizaciones(self) -> dict:
-        data = await self.client.get_ventas_cotizaciones()
+        data = await self.client.get_ventas_cotizaciones_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas_cotizaciones", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
@@ -732,7 +732,7 @@ class SyncService:
         return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_ventas_cobros(self) -> dict:
-        data = await self.client.get_ventas_cobros()
+        data = await self.client.get_ventas_cobros_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas_cobros", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
@@ -759,7 +759,7 @@ class SyncService:
         return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_ventas_dte(self) -> dict:
-        data = await self.client.get_ventas_dte()
+        data = await self.client.get_ventas_dte_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas_dte", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data

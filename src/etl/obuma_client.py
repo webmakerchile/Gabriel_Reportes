@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import logging
 from src.config import OBUMA_API_KEY, OBUMA_BASE_URL
@@ -43,6 +44,30 @@ class ObumaClient:
         except Exception as e:
             logger.error(f"Error posting {endpoint}: {e}")
             return {"error": str(e)}
+
+    async def _get_all_pages(self, endpoint: str, params: dict = None) -> dict:
+        merged_params = dict(params or {})
+        merged_params["page"] = 1
+        first_page = await self._get(endpoint, merged_params)
+        if isinstance(first_page, dict) and "error" in first_page:
+            return first_page
+        all_items = list(first_page.get("data", []) if isinstance(first_page, dict) else [])
+        total_pages = int(first_page.get("data-total-pages", 1)) if isinstance(first_page, dict) else 1
+        total_items = int(first_page.get("data-total-items", len(all_items))) if isinstance(first_page, dict) else len(all_items)
+        logger.info(f"Pagination: {endpoint} - page 1/{total_pages}, total items: {total_items}")
+        for page in range(2, total_pages + 1):
+            await asyncio.sleep(0.1)
+            merged_params["page"] = page
+            page_data = await self._get(endpoint, merged_params)
+            if isinstance(page_data, dict) and "error" in page_data:
+                logger.error(f"Error fetching {endpoint} page {page}: {page_data}")
+                continue
+            page_items = page_data.get("data", []) if isinstance(page_data, dict) else []
+            all_items.extend(page_items)
+            if page % 10 == 0:
+                logger.info(f"Pagination: {endpoint} - page {page}/{total_pages}, accumulated {len(all_items)} items")
+        logger.info(f"Pagination complete: {endpoint} - {len(all_items)} total items fetched across {total_pages} pages")
+        return {"data": all_items, "data-total-items": total_items}
 
     async def get_clientes(self, params: dict = None) -> dict:
         return await self._get("clientes.list.json", params)
@@ -130,6 +155,21 @@ class ObumaClient:
 
     async def get_ventas_dte(self, params: dict = None) -> dict:
         return await self._get("ventas.listDte.json", params)
+
+    async def get_ventas_all_pages(self, params: dict = None) -> dict:
+        return await self._get_all_pages("ventas.list.json", params)
+
+    async def get_ventas_items_all_pages(self, params: dict = None) -> dict:
+        return await self._get_all_pages("ventas.listItems.json", params)
+
+    async def get_ventas_cobros_all_pages(self, params: dict = None) -> dict:
+        return await self._get_all_pages("ventasCobros.list.json", params)
+
+    async def get_ventas_cotizaciones_all_pages(self, params: dict = None) -> dict:
+        return await self._get_all_pages("ventasCotizaciones.list.json", params)
+
+    async def get_ventas_dte_all_pages(self, params: dict = None) -> dict:
+        return await self._get_all_pages("ventas.listDte.json", params)
 
     async def get_boletas_electronicas(self, params: dict = None) -> dict:
         p = params or {}
