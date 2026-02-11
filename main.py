@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 
 NGINX_CONF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nginx.conf")
 
+STREAMLIT_PORT = 8501
+FASTAPI_PORT = 8000
+NGINX_PORT = 5000
+
 
 def wait_for_port(port, host="127.0.0.1", timeout=60):
     start = time.time()
@@ -24,17 +28,17 @@ def wait_for_port(port, host="127.0.0.1", timeout=60):
     return False
 
 
-def run_fastapi(port=8000):
+def run_fastapi():
     import uvicorn
     from src.api.main import app
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=FASTAPI_PORT, log_level="info")
 
 
-def run_streamlit(port=5001):
+def run_streamlit():
     subprocess.run([
         sys.executable, "-m", "streamlit", "run",
         "src/dashboard/app.py",
-        f"--server.port={port}",
+        f"--server.port={STREAMLIT_PORT}",
         "--server.address=127.0.0.1",
         "--server.headless=true",
         "--browser.gatherUsageStats=false",
@@ -44,8 +48,14 @@ def run_streamlit(port=5001):
     ])
 
 
+def setup_tmp_dirs():
+    for d in ["client_temp", "proxy_temp", "fastcgi_temp", "uwsgi_temp", "scgi_temp", "nginx_client_body"]:
+        os.makedirs(f"/tmp/{d}", exist_ok=True)
+
+
 def run_nginx():
-    os.makedirs("/tmp/nginx_client_body", exist_ok=True)
+    setup_tmp_dirs()
+
     result = subprocess.run(
         ["nginx", "-t", "-c", NGINX_CONF],
         capture_output=True, text=True
@@ -56,7 +66,7 @@ def run_nginx():
 
     logger.info("Nginx config OK, starting...")
     proc = subprocess.Popen(
-        ["nginx", "-g", "daemon off;", "-c", NGINX_CONF],
+        ["nginx", "-g", "daemon off;", "-c", NGINX_CONF, "-e", "/tmp/nginx_error.log"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
 
@@ -71,22 +81,22 @@ def run_nginx():
 if __name__ == "__main__":
     fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
     fastapi_thread.start()
-    logger.info("FastAPI iniciando en 127.0.0.1:8000")
+    logger.info(f"FastAPI iniciando en 127.0.0.1:{FASTAPI_PORT}")
 
     streamlit_thread = threading.Thread(target=run_streamlit, daemon=True)
     streamlit_thread.start()
-    logger.info("Streamlit iniciando en 127.0.0.1:5001")
+    logger.info(f"Streamlit iniciando en 127.0.0.1:{STREAMLIT_PORT}")
 
     logger.info("Esperando que Streamlit y FastAPI esten listos...")
-    if wait_for_port(5001):
-        logger.info("Streamlit listo en puerto 5001")
+    if wait_for_port(STREAMLIT_PORT):
+        logger.info(f"Streamlit listo en puerto {STREAMLIT_PORT}")
     else:
-        logger.error("Streamlit no respondio en 60 segundos")
+        logger.error(f"Streamlit no respondio en 60 segundos (puerto {STREAMLIT_PORT})")
 
-    if wait_for_port(8000):
-        logger.info("FastAPI listo en puerto 8000")
+    if wait_for_port(FASTAPI_PORT):
+        logger.info(f"FastAPI listo en puerto {FASTAPI_PORT}")
     else:
-        logger.error("FastAPI no respondio en 60 segundos")
+        logger.error(f"FastAPI no respondio en 60 segundos (puerto {FASTAPI_PORT})")
 
-    logger.info("Nginx reverse proxy iniciando en 0.0.0.0:5000")
+    logger.info(f"Nginx reverse proxy iniciando en 0.0.0.0:{NGINX_PORT}")
     run_nginx()
