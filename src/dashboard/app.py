@@ -10,6 +10,8 @@ import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+TRACKED_VENDEDOR_IDS = ["28856", "28886", "28887", "28891", "28892"]
+
 from src.database import SessionLocal, engine, Base
 from src.models.models import (
     VentaHistorico, CompraHistorico, Producto, ContabilidadHistorico,
@@ -317,7 +319,6 @@ if page == "Dashboard":
         with fc2:
             dash_date_to = st.date_input("Hasta", value=date.today(), key="dash_to")
         with fc3:
-            TRACKED_VENDEDOR_IDS = ["28856", "28886", "28887", "28891", "28892"]
             empleados_list = db.query(Empleado).filter(Empleado.activo == True).order_by(Empleado.nombre).all()
             vendedor_names = {e.obuma_id: e.nombre for e in empleados_list}
             tracked_empleados = [e for e in empleados_list if e.obuma_id in TRACKED_VENDEDOR_IDS]
