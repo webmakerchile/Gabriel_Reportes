@@ -1,0 +1,86 @@
+Review your DNS records
+Records we found:
+
+Our scan may have missed uncommon records or custom subdomains. Compare the list below to your current DNS provider (most likely your registrar) and add any missing records. Pay close attention to all records on the zone apex, records of the type A, AAAA, and CNAME and records needed for email like MX, SPF, DMARC, DKIM, and MTA-STS.
+
+An MX record was not found for your root domain. An MX record is required for mail to reach @autoreportes.cl addresses.
+
+An A, AAAA or CNAME record was not found for the www subdomain. The www.autoreportes.cl subdomain will not resolve.
+
+An A, AAAA or CNAME record was not found pointing to the root domain. The autoreportes.cl domain will not resolve.
+
+Your traffic is almost ready to proxy
+
+How proxying works
+Your DNS records tell Cloudflare where your web content is hosted, so we can hide the origin and proxy your web traffic.
+
+
+Proxied: HTTP traffic goes through the Cloudflare network. Required for services like caching, smart routing, and Web Application Firewall.
+
+
+
+DNS only: HTTP traffic bypasses Cloudflare and goes directly to the origin, but DNS resolution still benefits from our fast and secure network. A gray cloud means proxying is off, no cloud means the record is not eligible for proxying.
+
+
+DNS management for autoreportes.cl
+
+About DNS records
+DNS Setup: Full
+
+
+Import DNS Records
+Search DNS Records
+Your search yielded 4 results
+
+Type
+
+Name
+
+Content
+
+Proxy status
+
+TTL
+
+Actions
+
+TXT
+www
+"replit-verify=607162e8-e190-4222-b85b-ae348d683b2e"
+DNS only
+
+Auto
+EditWhen toggled open, an additional table row will be added below this row to enable editing DNS records.
+
+
+
+A
+www
+34.111.179.208
+
+
+Proxied
+
+Auto
+Delete
+
+TXT
+autoreportes.cl
+"replit-verify=607162e8-e190-4222-b85b-ae348d683b2e"
+DNS only
+
+Auto
+EditWhen toggled open, an additional table row will be added below this row to enable editing DNS records.
+
+
+
+A
+autoreportes.cl
+34.111.179.208
+
+
+Proxied
+
+Auto
+Delete
+
