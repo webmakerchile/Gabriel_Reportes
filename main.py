@@ -78,7 +78,21 @@ def run_nginx():
     proc.wait()
 
 
+def kill_stale_ports():
+    for port in [NGINX_PORT, STREAMLIT_PORT, FASTAPI_PORT]:
+        try:
+            result = subprocess.run(
+                ["fuser", "-k", f"{port}/tcp"],
+                capture_output=True, timeout=5
+            )
+        except Exception:
+            pass
+    time.sleep(1)
+
+
 if __name__ == "__main__":
+    kill_stale_ports()
+
     fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
     fastapi_thread.start()
     logger.info(f"FastAPI iniciando en 127.0.0.1:{FASTAPI_PORT}")
