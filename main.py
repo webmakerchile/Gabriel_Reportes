@@ -14,6 +14,8 @@ NGINX_CONF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nginx.con
 STREAMLIT_PORT = 8501
 FASTAPI_PORT = 8000
 NGINX_PORT = 5000
+MAX_RESTARTS = 10
+RESTART_DELAY = 5
 
 
 def wait_for_port(port, host="127.0.0.1", timeout=60):
@@ -28,24 +30,45 @@ def wait_for_port(port, host="127.0.0.1", timeout=60):
     return False
 
 
-def run_fastapi():
-    import uvicorn
-    from src.api.main import app
-    uvicorn.run(app, host="127.0.0.1", port=FASTAPI_PORT, log_level="info")
+def run_fastapi_with_restart():
+    restarts = 0
+    while restarts < MAX_RESTARTS:
+        try:
+            logger.info(f"FastAPI iniciando (intento {restarts + 1})...")
+            import uvicorn
+            from src.api.main import app
+            uvicorn.run(app, host="127.0.0.1", port=FASTAPI_PORT, log_level="info")
+        except Exception as e:
+            logger.error(f"FastAPI crash: {e}")
+        restarts += 1
+        if restarts < MAX_RESTARTS:
+            logger.warning(f"FastAPI reiniciando en {RESTART_DELAY}s (intento {restarts + 1}/{MAX_RESTARTS})...")
+            time.sleep(RESTART_DELAY)
+    logger.error("FastAPI alcanzo el maximo de reinicios.")
 
 
-def run_streamlit():
-    subprocess.run([
-        sys.executable, "-m", "streamlit", "run",
-        "src/dashboard/app.py",
-        f"--server.port={STREAMLIT_PORT}",
-        "--server.address=127.0.0.1",
-        "--server.headless=true",
-        "--browser.gatherUsageStats=false",
-        "--server.enableCORS=false",
-        "--server.enableXsrfProtection=false",
-        "--server.enableWebsocketCompression=false",
-    ])
+def run_streamlit_with_restart():
+    restarts = 0
+    while restarts < MAX_RESTARTS:
+        logger.info(f"Streamlit iniciando (intento {restarts + 1})...")
+        result = subprocess.run([
+            sys.executable, "-m", "streamlit", "run",
+            "src/dashboard/app.py",
+            f"--server.port={STREAMLIT_PORT}",
+            "--server.address=127.0.0.1",
+            "--server.headless=true",
+            "--browser.gatherUsageStats=false",
+            "--server.enableCORS=false",
+            "--server.enableXsrfProtection=false",
+            "--server.enableWebsocketCompression=false",
+        ])
+        if result.returncode != 0:
+            logger.error(f"Streamlit salio con codigo {result.returncode}")
+        restarts += 1
+        if restarts < MAX_RESTARTS:
+            logger.warning(f"Streamlit reiniciando en {RESTART_DELAY}s (intento {restarts + 1}/{MAX_RESTARTS})...")
+            time.sleep(RESTART_DELAY)
+    logger.error("Streamlit alcanzo el maximo de reinicios.")
 
 
 def setup_tmp_dirs():
@@ -55,6 +78,9 @@ def setup_tmp_dirs():
 
 def run_nginx():
     setup_tmp_dirs()
+
+    subprocess.run(["nginx", "-s", "stop"], capture_output=True)
+    time.sleep(0.5)
 
     result = subprocess.run(
         ["nginx", "-t", "-c", NGINX_CONF],
@@ -79,24 +105,22 @@ def run_nginx():
 
 
 if __name__ == "__main__":
-    fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
+    fastapi_thread = threading.Thread(target=run_fastapi_with_restart, daemon=True)
     fastapi_thread.start()
-    logger.info(f"FastAPI iniciando en 127.0.0.1:{FASTAPI_PORT}")
 
-    streamlit_thread = threading.Thread(target=run_streamlit, daemon=True)
+    streamlit_thread = threading.Thread(target=run_streamlit_with_restart, daemon=True)
     streamlit_thread.start()
-    logger.info(f"Streamlit iniciando en 127.0.0.1:{STREAMLIT_PORT}")
 
     logger.info("Esperando que Streamlit y FastAPI esten listos...")
-    if wait_for_port(STREAMLIT_PORT):
+    if wait_for_port(STREAMLIT_PORT, timeout=90):
         logger.info(f"Streamlit listo en puerto {STREAMLIT_PORT}")
     else:
-        logger.error(f"Streamlit no respondio en 60 segundos (puerto {STREAMLIT_PORT})")
+        logger.error(f"Streamlit no respondio en 90 segundos (puerto {STREAMLIT_PORT})")
 
-    if wait_for_port(FASTAPI_PORT):
+    if wait_for_port(FASTAPI_PORT, timeout=90):
         logger.info(f"FastAPI listo en puerto {FASTAPI_PORT}")
     else:
-        logger.error(f"FastAPI no respondio en 60 segundos (puerto {FASTAPI_PORT})")
+        logger.error(f"FastAPI no respondio en 90 segundos (puerto {FASTAPI_PORT})")
 
     logger.info(f"Nginx reverse proxy iniciando en 0.0.0.0:{NGINX_PORT}")
     run_nginx()

@@ -422,7 +422,7 @@ if page == "Dashboard":
                                              mode="lines", name="Tendencia",
                                              line=dict(color=ACCENT_AMBER, width=2.5, dash="dot")))
                 fig.update_layout(**chart_layout())
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig)
             else:
                 st.info("Sin datos de ventas para el rango seleccionado.")
 
@@ -447,7 +447,7 @@ if page == "Dashboard":
                 ))
                 fig2.update_layout(**chart_layout(height=380))
                 fig2.update_layout(yaxis=dict(autorange="reversed", showgrid=False))
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2)
             else:
                 st.info("Sin datos de vendedores.")
 
@@ -488,7 +488,7 @@ if page == "Dashboard":
                     textinfo="label+percent", textfont=dict(color="white")
                 ))
                 fig3.update_layout(**chart_layout())
-                st.plotly_chart(fig3, use_container_width=True)
+                st.plotly_chart(fig3)
             else:
                 st.info("Sin datos de clientes para segmentacion.")
 
@@ -514,7 +514,7 @@ if page == "Dashboard":
                     textposition="auto"
                 ))
                 fig4.update_layout(**chart_layout())
-                st.plotly_chart(fig4, use_container_width=True)
+                st.plotly_chart(fig4)
             else:
                 st.info("Sin datos de rentabilidad.")
 
@@ -534,7 +534,7 @@ if page == "Dashboard":
                     texttemplate="%{label}<br>%{percent}<br>$%{value:,.0f}"
                 ))
                 fig5.update_layout(**chart_layout())
-                st.plotly_chart(fig5, use_container_width=True)
+                st.plotly_chart(fig5)
             else:
                 st.info("Sin datos de cobranza.")
 
@@ -563,7 +563,7 @@ if page == "Dashboard":
                 ))
                 fig6.update_layout(**chart_layout(height=420))
                 fig6.update_layout(yaxis=dict(autorange="reversed", showgrid=False))
-                st.plotly_chart(fig6, use_container_width=True)
+                st.plotly_chart(fig6)
             else:
                 st.info("Sin datos de productos vendidos.")
 
@@ -619,7 +619,7 @@ if page == "Dashboard":
                     line=dict(color=ACCENT_RED, width=2.5), marker=dict(size=6)
                 ))
                 fig7.update_layout(**chart_layout())
-                st.plotly_chart(fig7, use_container_width=True)
+                st.plotly_chart(fig7)
             else:
                 st.info("Sin datos para comparacion ventas vs compras.")
 
@@ -645,7 +645,7 @@ if page == "Dashboard":
                     textinfo="label+percent", textfont=dict(color="white")
                 ))
                 fig8.update_layout(**chart_layout())
-                st.plotly_chart(fig8, use_container_width=True)
+                st.plotly_chart(fig8)
             else:
                 st.info("Sin datos de tipos de documento.")
 
@@ -668,7 +668,7 @@ if page == "Dashboard":
                         "Vendedor": vend_name,
                         "Estado": "Anulada" if v.anulada else "Vigente",
                     })
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin transacciones recientes.")
 
@@ -693,7 +693,7 @@ if page == "Dashboard":
                     "Total": format_clp(c.total), "Margen": format_clp(c.margen),
                     "Docs": c.transacciones
                 } for c in top_clientes])
-                st.dataframe(df_top, use_container_width=True, hide_index=True, height=400)
+                st.dataframe(df_top, hide_index=True, height=400)
             else:
                 st.info("Sin datos de clientes.")
     finally:
@@ -707,7 +707,7 @@ elif page == "Vendedores":
     st.markdown('<p class="page-title">Gestion de Vendedores</p>', unsafe_allow_html=True)
     st.markdown('<p class="page-subtitle">Rendimiento, metas y cartera de clientes por vendedor</p>', unsafe_allow_html=True)
 
-    TRACKED_VENDEDORES = ["28856", "28886", "28887", "28891", "28892"]
+    TRACKED_VENDEDORES = TRACKED_VENDEDOR_IDS
 
     db = get_db()
     try:
@@ -851,7 +851,7 @@ elif page == "Vendedores":
                 ))
                 fig_rend.update_layout(**chart_layout(height=400))
                 fig_rend.update_layout(barmode="group")
-                st.plotly_chart(fig_rend, use_container_width=True)
+                st.plotly_chart(fig_rend)
 
         # ── TAB 2: Cartera de Clientes ──
         with tab_cartera:
@@ -898,7 +898,7 @@ elif page == "Vendedores":
 
                     df_cart = pd.DataFrame(rows)
                     st.dataframe(df_cart[["Cliente", "RUT", "Asignado", "Ventas 12M"]],
-                                 use_container_width=True, hide_index=True, height=400)
+                                 hide_index=True, height=400)
                 else:
                     st.info("Este vendedor no tiene clientes asignados.")
 
@@ -978,7 +978,7 @@ elif page == "Vendedores":
                         text=chart_vend_counts, textposition="auto"
                     ))
                     fig_cart.update_layout(**chart_layout())
-                    st.plotly_chart(fig_cart, use_container_width=True)
+                    st.plotly_chart(fig_cart)
             else:
                 st.warning("No se encontraron vendedores registrados.")
 
@@ -1083,7 +1083,7 @@ elif page == "Vendedores":
                                 df_si_sorted[["Cliente", "RUT", "Total Ventas Fmt", "Documentos"]].rename(
                                     columns={"Total Ventas Fmt": "Total Ventas"}
                                 ),
-                                use_container_width=True, hide_index=True, height=400
+                                hide_index=True, height=400
                             )
                         else:
                             st.info("Ningún cliente de la cartera compró en este periodo.")
@@ -1094,7 +1094,7 @@ elif page == "Vendedores":
                             df_no = pd.DataFrame(no_compraron_rows)
                             st.dataframe(
                                 df_no[["Cliente", "RUT", "Última Compra", "Días sin Comprar"]],
-                                use_container_width=True, hide_index=True, height=400
+                                hide_index=True, height=400
                             )
                         else:
                             st.info("Todos los clientes de la cartera compraron en este periodo.")
@@ -1115,7 +1115,7 @@ elif page == "Vendedores":
                         xaxis_title="",
                         yaxis_title="Cantidad de Clientes"
                     )
-                    st.plotly_chart(fig_cruce, use_container_width=True)
+                    st.plotly_chart(fig_cruce)
 
                     st.markdown("")
                     periodo_label = f"{cruce_anio}" if cruce_mes_sel == "Todo el año" else f"{cruce_mes_sel} {cruce_anio}"
@@ -1247,7 +1247,6 @@ elif page == "Vendedores":
 
                 edited_df = st.data_editor(
                     df_metas,
-                    use_container_width=True,
                     hide_index=True,
                     disabled=["Mes"],
                     num_rows="fixed",
@@ -1383,7 +1382,7 @@ elif page == "Ventas":
                         fig_vm = go.Figure(go.Bar(x=monthly["label"], y=monthly["total"],
                                                    marker_color=ACCENT_BLUE))
                         fig_vm.update_layout(**chart_layout())
-                        st.plotly_chart(fig_vm, use_container_width=True)
+                        st.plotly_chart(fig_vm)
 
                 with col_vc2:
                     st.markdown('<p class="section-header">Tipo de Documento</p>', unsafe_allow_html=True)
@@ -1396,7 +1395,7 @@ elif page == "Ventas":
                             textinfo="label+percent", textfont=dict(color="white")
                         ))
                         fig_tp.update_layout(**chart_layout())
-                        st.plotly_chart(fig_tp, use_container_width=True)
+                        st.plotly_chart(fig_tp)
 
                 st.markdown("")
                 data = []
@@ -1413,7 +1412,7 @@ elif page == "Ventas":
                         "Vendedor": vend_map_v.get(v.vendedor_id, "-") if v.vendedor_id else "-",
                         "Estado": "Anulada" if v.anulada else "Vigente",
                     })
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("No hay ventas en el rango seleccionado.")
 
@@ -1429,7 +1428,7 @@ elif page == "Ventas":
                     "Precio Unit.": format_clp(i.precio_unitario),
                     "Total": format_clp(i.total),
                 } for i in items]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin items de venta. Sincronice con Obuma.")
 
@@ -1444,7 +1443,7 @@ elif page == "Ventas":
                     "Total": format_clp(c.total),
                     "Estado": c.estado or "-",
                 } for c in cotizaciones]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin cotizaciones. Sincronice con Obuma.")
 
@@ -1464,7 +1463,7 @@ elif page == "Ventas":
                     "Forma Pago": c.forma_pago or "-",
                     "Estado": c.estado or "-",
                 } for c in cobros]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin cobros registrados. Sincronice con Obuma.")
 
@@ -1479,7 +1478,7 @@ elif page == "Ventas":
                     "Total": format_clp(d.monto_total),
                     "Estado SII": d.estado_sii or "-",
                 } for d in dtes]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin DTE emitidos. Sincronice con Obuma.")
     finally:
@@ -1541,7 +1540,7 @@ elif page == "Clientes":
                         ))
                         fig_cl.update_layout(**chart_layout(height=350))
                         fig_cl.update_layout(yaxis=dict(autorange="reversed", showgrid=False))
-                        st.plotly_chart(fig_cl, use_container_width=True)
+                        st.plotly_chart(fig_cl)
 
                 with col_cc2:
                     st.markdown('<p class="section-header">Actividad de Clientes (Meses con Compras)</p>', unsafe_allow_html=True)
@@ -1563,7 +1562,7 @@ elif page == "Clientes":
                         fig_act.update_layout(**chart_layout(height=350))
                         fig_act.update_layout(yaxis=dict(autorange="reversed", showgrid=False),
                                               xaxis=dict(title="Meses con compras"))
-                        st.plotly_chart(fig_act, use_container_width=True)
+                        st.plotly_chart(fig_act)
 
                 st.markdown("")
                 data = []
@@ -1579,7 +1578,7 @@ elif page == "Clientes":
                         "Total Facturado": format_clp(total),
                         "Activo": "Si" if c.activo else "No",
                     })
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("No hay clientes que coincidan con la busqueda.")
 
@@ -1594,7 +1593,7 @@ elif page == "Clientes":
                     "Cargo": c.cargo or "-",
                     "Cliente ID": c.cliente_id_obuma or "-",
                 } for c in contactos]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), hide_index=True)
             else:
                 st.info("Sin contactos de clientes. Sincronice con Obuma.")
 
@@ -1609,7 +1608,7 @@ elif page == "Clientes":
                     "Region": d.region or "-",
                     "Cliente ID": d.cliente_id_obuma or "-",
                 } for d in direcciones]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), hide_index=True)
             else:
                 st.info("Sin direcciones de clientes. Sincronice con Obuma.")
     finally:
@@ -1639,7 +1638,7 @@ elif page == "Proveedores":
                 "Telefono": p.telefono or "-",
                 "Direccion": (p.direccion or "-")[:60],
             } for p in proveedores]
-            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(data), hide_index=True)
         else:
             st.info("Sin proveedores registrados. Sincronice con Obuma.")
     finally:
@@ -1682,7 +1681,7 @@ elif page == "Productos":
                     "Stock": p.stock_actual or 0,
                     "Activo": "Si" if p.activo else "No",
                 } for p in productos]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin productos. Sincronice con Obuma.")
 
@@ -1694,7 +1693,7 @@ elif page == "Productos":
                     "ID": c.obuma_id or "-",
                     "Nombre": c.nombre or "-",
                 } for c in categorias]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), hide_index=True)
             else:
                 st.info("Sin categorias. Sincronice con Obuma.")
 
@@ -1707,7 +1706,7 @@ elif page == "Productos":
                     "Nombre": s.nombre or "-",
                     "Categoria ID": s.categoria_id_obuma or "-",
                 } for s in subcategorias]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), hide_index=True)
             else:
                 st.info("Sin subcategorias. Sincronice con Obuma.")
 
@@ -1719,7 +1718,7 @@ elif page == "Productos":
                     "ID": f.obuma_id or "-",
                     "Nombre": f.nombre or "-",
                 } for f in fabricantes]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), hide_index=True)
             else:
                 st.info("Sin fabricantes. Sincronice con Obuma.")
 
@@ -1733,7 +1732,7 @@ elif page == "Productos":
                     "Lista": p.lista_precio or "-",
                     "Precio": format_clp(p.precio),
                 } for p in precios]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin listas de precios. Sincronice con Obuma.")
     finally:
@@ -1769,7 +1768,7 @@ elif page == "Empleados":
                     "Cargo": e.cargo or "-",
                     "Activo": "Si" if e.activo else "No",
                 } for e in empleados]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(data), hide_index=True)
             else:
                 st.info("Sin empleados. Sincronice con Obuma.")
 
@@ -1794,7 +1793,7 @@ elif page == "Empleados":
                     "Descuentos": format_clp(r.total_descuentos),
                     "Liquido": format_clp(r.liquido),
                 } for r in remuneraciones]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin remuneraciones. Sincronice con Obuma.")
     finally:
@@ -1832,7 +1831,7 @@ elif page == "Compras":
                     "Total": format_clp(c.total),
                     "Estado": c.estado or "-",
                 } for c in compras]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin compras registradas. Sincronice con Obuma.")
 
@@ -1847,7 +1846,7 @@ elif page == "Compras":
                     "Total": format_clp(o.total),
                     "Estado": o.estado or "-",
                 } for o in ocs]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin ordenes de compra. Sincronice con Obuma.")
 
@@ -1868,7 +1867,7 @@ elif page == "Compras":
                     "Forma Pago": p.forma_pago or "-",
                     "Origen": p.origen or "-",
                 } for p in pagos]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
             else:
                 st.info("Sin pagos a proveedores. Sincronice con Obuma.")
 
@@ -1912,7 +1911,7 @@ elif page == "Contabilidad":
                 "Debe": format_clp(e.debe),
                 "Haber": format_clp(e.haber),
             } for e in entries])
-            st.dataframe(df, use_container_width=True, hide_index=True, height=400)
+            st.dataframe(df, hide_index=True, height=400)
         else:
             st.info("No hay registros de contabilidad. Sincronice con Obuma primero.")
     finally:
@@ -1950,7 +1949,7 @@ elif page == "CRM":
                 "Estado": l.estado or "-",
                 "Monto Est.": format_clp(l.monto_estimado),
             } for l in leads]
-            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=400)
+            st.dataframe(pd.DataFrame(data), hide_index=True, height=400)
         else:
             st.info("Sin leads CRM. Sincronice con Obuma.")
     finally:
@@ -2212,7 +2211,6 @@ elif page == "Reportes":
                                     file_name=os.path.basename(fp),
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                     key=f"rpt_dl_{idx}",
-                                    use_container_width=True
                                 )
 
                 with st.expander("📧 Enviar por Email", expanded=False):
@@ -2650,7 +2648,7 @@ elif page == "Sincronizacion":
                 "Registros BD": l.registros_db,
                 "Estado": l.estado.upper(),
             } for l in logs]
-            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(data), hide_index=True)
         else:
             st.info("Sin historial de sincronizacion.")
     finally:
@@ -2755,7 +2753,7 @@ elif page == "Auditoria":
                             return f"background-color: rgba(239,68,68,0.15); color: #f87171;"
 
                     styled_df = df_diag.style.map(color_estado, subset=["Estado"])
-                    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
+                    st.dataframe(styled_df, hide_index=True, height=600)
 
                     if sin_datos > 10:
                         st.warning(f"Su cuenta Obuma tiene datos solo en {con_datos} de {len(diag_results)} endpoints. Los endpoints sin datos ({sin_datos}) no tienen registros cargados en su ERP Obuma. Para que aparezcan aqui, primero debe cargar esos datos en Obuma (productos, compras, contabilidad, etc).")
@@ -2807,7 +2805,7 @@ elif page == "Auditoria":
                 return ""
 
             styled = df_tables.style.map(color_registros, subset=["Registros"])
-            st.dataframe(styled, use_container_width=True, hide_index=True, height=700)
+            st.dataframe(styled, hide_index=True, height=700)
 
         with tab_logs:
             st.markdown('<p class="section-header">Historial de Sincronizacion</p>', unsafe_allow_html=True)
@@ -2821,7 +2819,7 @@ elif page == "Auditoria":
                     "Discrepancias": l.discrepancias,
                     "Estado": l.estado.upper(),
                 } for l in logs]
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True, height=600)
+                st.dataframe(pd.DataFrame(data), hide_index=True, height=600)
             else:
                 st.info("Sin historial de sincronizacion.")
     finally:
