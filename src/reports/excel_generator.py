@@ -8,7 +8,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, distinct
-from src.models.models import VentaHistorico, ClienteFinal, Empleado, ReporteGenerado
+from src.models.models import VentaHistorico, ClienteFinal, Empleado, ReporteGenerado, VendedorCartera
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,9 @@ SUBTITLE_FONT = Font(name="Calibri", bold=True, size=11, color="404040")
 
 YELLOW_FILL = PatternFill(start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid")
 GREEN_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
+RED_FILL = PatternFill(start_color="FFFF6B6B", end_color="FFFF6B6B", fill_type="solid")
+LIGHT_GREEN_FILL = PatternFill(start_color="FFE8F5E9", end_color="FFE8F5E9", fill_type="solid")
+LIGHT_RED_FILL = PatternFill(start_color="FFFFEBEE", end_color="FFFFEBEE", fill_type="solid")
 SEGMENTO_FONT = Font(name="Calibri", bold=True, size=11)
 
 MONTH_NAMES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
@@ -96,6 +99,160 @@ def _resolve_date_range(date_from, date_to):
     if date_to is None:
         date_to = date.today()
     return date_from, date_to, True
+
+
+def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to):
+    cartera_entries = db.query(VendedorCartera, ClienteFinal).join(
+        ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
+    ).filter(
+        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+        VendedorCartera.activo == True
+    ).all()
+
+    if not cartera_entries:
+        return
+
+    compraron = []
+    no_compraron = []
+
+    for vc, cli in cartera_entries:
+        ventas_result = db.query(
+            func.sum(VentaHistorico.total).label("total_ventas"),
+            func.count(VentaHistorico.id).label("num_docs")
+        ).filter(
+            VentaHistorico.cliente_id == cli.id,
+            VentaHistorico.vendedor_id == vendedor_obuma_id,
+            VentaHistorico.anulada == False,
+            VentaHistorico.fecha >= date_from,
+            VentaHistorico.fecha <= date_to
+        ).first()
+
+        total_ventas = ventas_result.total_ventas or 0
+        num_docs = ventas_result.num_docs or 0
+
+        if num_docs > 0:
+            compraron.append({
+                'nombre': cli.nombre or '',
+                'rut': cli.rut or '',
+                'total_ventas': total_ventas,
+                'num_docs': num_docs,
+            })
+        else:
+            ultima_compra = db.query(func.max(VentaHistorico.fecha)).filter(
+                VentaHistorico.cliente_id == cli.id,
+                VentaHistorico.vendedor_id == vendedor_obuma_id,
+                VentaHistorico.anulada == False
+            ).scalar()
+            dias_sin = None
+            ultima_str = "Sin registro"
+            if ultima_compra:
+                if hasattr(ultima_compra, 'date'):
+                    ultima_date = ultima_compra.date()
+                else:
+                    ultima_date = ultima_compra
+                dias_sin = (date.today() - ultima_date).days
+                ultima_str = str(ultima_date)
+
+            no_compraron.append({
+                'nombre': cli.nombre or '',
+                'rut': cli.rut or '',
+                'ultima_compra': ultima_str,
+                'dias_sin_comprar': dias_sin,
+            })
+
+    compraron.sort(key=lambda x: x['total_ventas'], reverse=True)
+    no_compraron.sort(key=lambda x: (x['dias_sin_comprar'] is None, -(x['dias_sin_comprar'] or 0)))
+
+    total_cartera = len(cartera_entries)
+    total_compraron = len(compraron)
+    total_no_compraron = len(no_compraron)
+    cobertura = (total_compraron / total_cartera * 100) if total_cartera > 0 else 0
+
+    GREEN_HEADER = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
+    RED_HEADER = PatternFill(start_color="EF4444", end_color="EF4444", fill_type="solid")
+    BLUE_HEADER = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
+
+    ws = wb.create_sheet("Cruce Cartera vs Ventas")
+
+    ws.cell(row=1, column=1, value=f"Cruce Cartera vs Ventas - {empleado.nombre}").font = TITLE_FONT
+    ws.merge_cells('A1:F1')
+    ws.cell(row=2, column=1, value=f"Periodo: {date_from.strftime('%d/%m/%Y')} - {date_to.strftime('%d/%m/%Y')}").font = SUBTITLE_FONT
+    ws.merge_cells('A2:F2')
+
+    ws.cell(row=4, column=1, value="Total Cartera")
+    ws.cell(row=4, column=2, value=total_cartera)
+    ws.cell(row=5, column=1, value="Compraron")
+    ws.cell(row=5, column=2, value=total_compraron)
+    ws.cell(row=6, column=1, value="No Compraron")
+    ws.cell(row=6, column=2, value=total_no_compraron)
+    ws.cell(row=7, column=1, value="Cobertura")
+    ws.cell(row=7, column=2, value=f"{cobertura:.1f}%")
+    for r in range(4, 8):
+        ws.cell(row=r, column=1).font = Font(bold=True)
+        ws.cell(row=r, column=1).border = THIN_BORDER
+        ws.cell(row=r, column=2).border = THIN_BORDER
+    ws.cell(row=5, column=2).fill = LIGHT_GREEN_FILL
+    ws.cell(row=6, column=2).fill = LIGHT_RED_FILL
+
+    row = 9
+    ws.cell(row=row, column=1, value=f"CLIENTES QUE COMPRARON ({total_compraron})").font = Font(bold=True, size=12, color="10B981")
+    ws.merge_cells(f'A{row}:D{row}')
+    row += 1
+
+    comp_headers = ["N°", "RUT", "Razon Social", "Total Ventas", "Documentos"]
+    for i, h in enumerate(comp_headers, 1):
+        cell = ws.cell(row=row, column=i, value=h)
+        cell.font = HEADER_FONT
+        cell.fill = GREEN_HEADER
+        cell.alignment = HEADER_ALIGNMENT
+        cell.border = THIN_BORDER
+    row += 1
+
+    for idx, c in enumerate(compraron, 1):
+        ws.cell(row=row, column=1, value=idx).border = THIN_BORDER
+        ws.cell(row=row, column=2, value=c['rut']).border = THIN_BORDER
+        ws.cell(row=row, column=3, value=c['nombre']).border = THIN_BORDER
+        cell = ws.cell(row=row, column=4, value=c['total_ventas'])
+        cell.number_format = CURRENCY_FORMAT
+        cell.border = THIN_BORDER
+        ws.cell(row=row, column=5, value=c['num_docs']).border = THIN_BORDER
+        for col in range(1, 6):
+            ws.cell(row=row, column=col).fill = LIGHT_GREEN_FILL
+        row += 1
+
+    row += 1
+    ws.cell(row=row, column=1, value=f"CLIENTES QUE NO COMPRARON ({total_no_compraron})").font = Font(bold=True, size=12, color="EF4444")
+    ws.merge_cells(f'A{row}:D{row}')
+    row += 1
+
+    no_headers = ["N°", "RUT", "Razon Social", "Ultima Compra", "Dias sin Comprar"]
+    for i, h in enumerate(no_headers, 1):
+        cell = ws.cell(row=row, column=i, value=h)
+        cell.font = HEADER_FONT
+        cell.fill = RED_HEADER
+        cell.alignment = HEADER_ALIGNMENT
+        cell.border = THIN_BORDER
+    row += 1
+
+    for idx, c in enumerate(no_compraron, 1):
+        ws.cell(row=row, column=1, value=idx).border = THIN_BORDER
+        ws.cell(row=row, column=2, value=c['rut']).border = THIN_BORDER
+        ws.cell(row=row, column=3, value=c['nombre']).border = THIN_BORDER
+        ws.cell(row=row, column=4, value=c['ultima_compra']).border = THIN_BORDER
+        dias = c['dias_sin_comprar']
+        cell_dias = ws.cell(row=row, column=5, value=dias if dias is not None else "Sin registro")
+        cell_dias.border = THIN_BORDER
+        for col in range(1, 6):
+            ws.cell(row=row, column=col).fill = LIGHT_RED_FILL
+        row += 1
+
+    _auto_width(ws)
+
+    ws.column_dimensions['A'].width = 6
+    ws.column_dimensions['B'].width = 16
+    ws.column_dimensions['C'].width = 42
+    ws.column_dimensions['D'].width = 18
+    ws.column_dimensions['E'].width = 18
 
 
 def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: date = None, date_to: date = None) -> str:
@@ -250,6 +407,8 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
         ws.cell(row=row_num, column=23, value=r['nivel_riesgo']).border = THIN_BORDER
 
     _auto_width(ws)
+
+    _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to)
 
     os.makedirs("reports", exist_ok=True)
     vendedor_rut = (empleado.rut or vendedor_obuma_id).replace(".", "").replace("-", "")
