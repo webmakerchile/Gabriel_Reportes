@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
+from io import BytesIO
 from sqlalchemy import func, extract, distinct
 import os
 import sys
@@ -710,8 +711,8 @@ elif page == "Vendedores":
 
     db = get_db()
     try:
-        tab_rend, tab_cartera, tab_metas = st.tabs([
-            "📊 Rendimiento vs Metas", "👥 Cartera de Clientes", "🎯 Configurar Metas"
+        tab_rend, tab_cartera, tab_cruce, tab_metas = st.tabs([
+            "📊 Rendimiento vs Metas", "👥 Cartera de Clientes", "🔍 Cruce Cartera vs Ventas", "🎯 Configurar Metas"
         ])
 
         current_year = date.today().year
@@ -981,7 +982,228 @@ elif page == "Vendedores":
             else:
                 st.warning("No se encontraron vendedores registrados.")
 
-        # ── TAB 3: Configurar Metas ──
+        # ── TAB 3: Cruce Cartera vs Ventas ──
+        with tab_cruce:
+            st.markdown('<p class="section-header">Cruce Cartera vs Ventas</p>', unsafe_allow_html=True)
+
+            cruce_vendedor_opts = [(vid, vendedores_map[vid].nombre) for vid in TRACKED_VENDEDORES if vid in vendedores_map]
+            if cruce_vendedor_opts:
+                cc1, cc2, cc3 = st.columns(3)
+                with cc1:
+                    cruce_sel_label = st.selectbox(
+                        "Vendedor",
+                        [f"{name} ({vid})" for vid, name in cruce_vendedor_opts],
+                        key="vend_cruce_sel"
+                    )
+                    cruce_sel_vid = cruce_sel_label.split("(")[-1].replace(")", "").strip()
+                with cc2:
+                    cruce_anio = st.selectbox("Año", list(range(current_year - 2, current_year + 2)),
+                                              index=2, key="vend_cruce_anio")
+                with cc3:
+                    cruce_mes_options = ["Todo el año"] + MONTH_LABELS
+                    cruce_mes_sel = st.selectbox("Mes", cruce_mes_options, index=0, key="vend_cruce_mes")
+
+                st.markdown("---")
+
+                cartera_cruce = db.query(VendedorCartera, ClienteFinal).join(
+                    ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
+                ).filter(
+                    VendedorCartera.empleado_obuma_id == cruce_sel_vid,
+                    VendedorCartera.activo == True
+                ).all()
+
+                if cartera_cruce:
+                    compraron_rows = []
+                    no_compraron_rows = []
+
+                    for vc, cli in cartera_cruce:
+                        ventas_q = db.query(
+                            func.sum(VentaHistorico.total).label("total_ventas"),
+                            func.count(VentaHistorico.id).label("num_docs")
+                        ).filter(
+                            VentaHistorico.cliente_id == cli.id,
+                            VentaHistorico.vendedor_id == cruce_sel_vid,
+                            VentaHistorico.anulada == False,
+                            extract('year', VentaHistorico.fecha) == cruce_anio
+                        )
+                        if cruce_mes_sel != "Todo el año":
+                            mes_idx = MONTH_LABELS.index(cruce_mes_sel) + 1
+                            ventas_q = ventas_q.filter(extract('month', VentaHistorico.fecha) == mes_idx)
+
+                        result = ventas_q.first()
+                        total_ventas = result.total_ventas or 0
+                        num_docs = result.num_docs or 0
+
+                        if num_docs > 0:
+                            compraron_rows.append({
+                                "Cliente": cli.nombre,
+                                "RUT": cli.rut or "—",
+                                "Total Ventas": total_ventas,
+                                "Total Ventas Fmt": format_clp(total_ventas),
+                                "Documentos": num_docs
+                            })
+                        else:
+                            ultima_compra = db.query(func.max(VentaHistorico.fecha)).filter(
+                                VentaHistorico.cliente_id == cli.id,
+                                VentaHistorico.vendedor_id == cruce_sel_vid,
+                                VentaHistorico.anulada == False
+                            ).scalar()
+                            dias_sin = (date.today() - ultima_compra.date()).days if ultima_compra else None
+                            no_compraron_rows.append({
+                                "Cliente": cli.nombre,
+                                "RUT": cli.rut or "—",
+                                "Última Compra": str(ultima_compra.date()) if ultima_compra else "Sin registro",
+                                "Días sin Comprar": dias_sin if dias_sin is not None else "—"
+                            })
+
+                    total_cartera = len(cartera_cruce)
+                    total_compraron = len(compraron_rows)
+                    total_no_compraron = len(no_compraron_rows)
+                    cobertura = (total_compraron / total_cartera * 100) if total_cartera > 0 else 0
+
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    with mc1:
+                        render_metric("Total Cartera", str(total_cartera), "👥", ACCENT_BLUE)
+                    with mc2:
+                        render_metric("Compraron", str(total_compraron), "✅", ACCENT_GREEN)
+                    with mc3:
+                        render_metric("No Compraron", str(total_no_compraron), "❌", ACCENT_RED)
+                    with mc4:
+                        render_metric("Cobertura", f"{cobertura:.1f}%", "📊", ACCENT_AMBER)
+
+                    st.markdown("")
+
+                    col_si, col_no = st.columns(2)
+                    with col_si:
+                        st.markdown(f'<p class="section-header" style="color:{ACCENT_GREEN};">✅ Clientes que Compraron ({total_compraron})</p>', unsafe_allow_html=True)
+                        if compraron_rows:
+                            df_si = pd.DataFrame(compraron_rows)
+                            df_si_sorted = df_si.sort_values("Total Ventas", ascending=False)
+                            st.dataframe(
+                                df_si_sorted[["Cliente", "RUT", "Total Ventas Fmt", "Documentos"]].rename(
+                                    columns={"Total Ventas Fmt": "Total Ventas"}
+                                ),
+                                use_container_width=True, hide_index=True, height=400
+                            )
+                        else:
+                            st.info("Ningún cliente de la cartera compró en este periodo.")
+
+                    with col_no:
+                        st.markdown(f'<p class="section-header" style="color:{ACCENT_RED};">❌ Clientes que NO Compraron ({total_no_compraron})</p>', unsafe_allow_html=True)
+                        if no_compraron_rows:
+                            df_no = pd.DataFrame(no_compraron_rows)
+                            st.dataframe(
+                                df_no[["Cliente", "RUT", "Última Compra", "Días sin Comprar"]],
+                                use_container_width=True, hide_index=True, height=400
+                            )
+                        else:
+                            st.info("Todos los clientes de la cartera compraron en este periodo.")
+
+                    st.markdown("")
+                    st.markdown('<p class="section-header">Comparación Visual</p>', unsafe_allow_html=True)
+
+                    fig_cruce = go.Figure(go.Bar(
+                        x=["Compraron", "No Compraron"],
+                        y=[total_compraron, total_no_compraron],
+                        marker_color=[ACCENT_GREEN, ACCENT_RED],
+                        text=[total_compraron, total_no_compraron],
+                        textposition="auto",
+                        textfont=dict(size=16, color="white")
+                    ))
+                    fig_cruce.update_layout(**chart_layout(height=350))
+                    fig_cruce.update_layout(
+                        xaxis_title="",
+                        yaxis_title="Cantidad de Clientes"
+                    )
+                    st.plotly_chart(fig_cruce, use_container_width=True)
+
+                    st.markdown("")
+                    periodo_label = f"{cruce_anio}" if cruce_mes_sel == "Todo el año" else f"{cruce_mes_sel} {cruce_anio}"
+                    emp_cruce = vendedores_map.get(cruce_sel_vid)
+                    nombre_vendedor = emp_cruce.nombre if emp_cruce else cruce_sel_vid
+
+                    if st.button("📥 Exportar a Excel", key="btn_cruce_export"):
+                        from openpyxl import Workbook
+                        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+                        wb = Workbook()
+
+                        ws_si = wb.active
+                        ws_si.title = "Compraron"
+                        header_font = Font(bold=True, color="FFFFFF", size=11)
+                        green_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
+                        red_fill = PatternFill(start_color="EF4444", end_color="EF4444", fill_type="solid")
+                        thin_border = Border(
+                            left=Side(style='thin'), right=Side(style='thin'),
+                            top=Side(style='thin'), bottom=Side(style='thin')
+                        )
+
+                        ws_si.append([f"Cruce Cartera vs Ventas - {nombre_vendedor} - {periodo_label}"])
+                        ws_si.merge_cells('A1:D1')
+                        ws_si['A1'].font = Font(bold=True, size=14)
+                        ws_si.append([])
+                        ws_si.append(["Cliente", "RUT", "Total Ventas", "Documentos"])
+                        for cell in ws_si[3]:
+                            cell.font = header_font
+                            cell.fill = green_fill
+                            cell.alignment = Alignment(horizontal='center')
+                            cell.border = thin_border
+                        for row in compraron_rows:
+                            ws_si.append([row["Cliente"], row["RUT"], row["Total Ventas"], row["Documentos"]])
+                        ws_si.column_dimensions['A'].width = 40
+                        ws_si.column_dimensions['B'].width = 15
+                        ws_si.column_dimensions['C'].width = 18
+                        ws_si.column_dimensions['D'].width = 14
+
+                        ws_no = wb.create_sheet("No Compraron")
+                        ws_no.append([f"Clientes que NO Compraron - {nombre_vendedor} - {periodo_label}"])
+                        ws_no.merge_cells('A1:D1')
+                        ws_no['A1'].font = Font(bold=True, size=14)
+                        ws_no.append([])
+                        ws_no.append(["Cliente", "RUT", "Última Compra", "Días sin Comprar"])
+                        for cell in ws_no[3]:
+                            cell.font = header_font
+                            cell.fill = red_fill
+                            cell.alignment = Alignment(horizontal='center')
+                            cell.border = thin_border
+                        for row in no_compraron_rows:
+                            ws_no.append([row["Cliente"], row["RUT"], row["Última Compra"], row["Días sin Comprar"]])
+                        ws_no.column_dimensions['A'].width = 40
+                        ws_no.column_dimensions['B'].width = 15
+                        ws_no.column_dimensions['C'].width = 18
+                        ws_no.column_dimensions['D'].width = 18
+
+                        ws_resumen = wb.create_sheet("Resumen", 0)
+                        ws_resumen.append(["Resumen Cruce Cartera vs Ventas"])
+                        ws_resumen.merge_cells('A1:B1')
+                        ws_resumen['A1'].font = Font(bold=True, size=14)
+                        ws_resumen.append([])
+                        ws_resumen.append(["Vendedor", nombre_vendedor])
+                        ws_resumen.append(["Periodo", periodo_label])
+                        ws_resumen.append(["Total Cartera", total_cartera])
+                        ws_resumen.append(["Compraron", total_compraron])
+                        ws_resumen.append(["No Compraron", total_no_compraron])
+                        ws_resumen.append(["Cobertura", f"{cobertura:.1f}%"])
+                        ws_resumen.column_dimensions['A'].width = 20
+                        ws_resumen.column_dimensions['B'].width = 30
+
+                        buffer = BytesIO()
+                        wb.save(buffer)
+                        buffer.seek(0)
+
+                        st.download_button(
+                            label="⬇️ Descargar Excel",
+                            data=buffer.getvalue(),
+                            file_name=f"cruce_cartera_{cruce_sel_vid}_{periodo_label.replace(' ', '_')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_cruce_excel"
+                        )
+                else:
+                    st.info("Este vendedor no tiene clientes asignados en su cartera.")
+            else:
+                st.warning("No se encontraron vendedores registrados.")
+
+        # ── TAB 4: Configurar Metas ──
         with tab_metas:
             st.markdown('<p class="section-header">Configuracion de Metas Mensuales</p>', unsafe_allow_html=True)
 
