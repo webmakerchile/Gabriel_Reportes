@@ -9,7 +9,7 @@ class ObumaClient:
     def __init__(self):
         self.base_url = OBUMA_BASE_URL
         self.headers = {"access-token": OBUMA_API_KEY}
-        self.timeout = 30.0
+        self.timeout = 60.0
 
     async def _get(self, endpoint: str, params: dict = None) -> dict:
         url = f"{self.base_url}/{endpoint}"
@@ -71,6 +71,9 @@ class ObumaClient:
 
     async def get_clientes(self, params: dict = None) -> dict:
         return await self._get("clientes.list.json", params)
+
+    async def get_clientes_all_pages(self, params: dict = None) -> dict:
+        return await self._get_all_pages("clientes.list.json", params)
 
     async def get_cliente_by_id(self, recurso_id: str) -> dict:
         return await self._get(f"clientes.findById.json/{recurso_id}")

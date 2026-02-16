@@ -137,7 +137,7 @@ class SyncService:
         return cliente.id
 
     async def sync_clientes(self) -> dict:
-        data = await self.client.get_clientes()
+        data = await self.client.get_clientes_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("clientes", 0, 0, 0, estado="error", detalle=str(data.get("error")))
             return data
@@ -590,14 +590,18 @@ class SyncService:
             if c.obuma_id:
                 cliente_cache[c.obuma_id] = c.id
 
-        self.db.query(VentaHistorico).filter(VentaHistorico.tenant_id == self.tenant_id).delete()
-        self.db.commit()
+        existing_cache = {}
+        for v in self.db.query(VentaHistorico).filter(VentaHistorico.tenant_id == self.tenant_id).all():
+            if v.obuma_id:
+                existing_cache[v.obuma_id] = v
 
+        api_obuma_ids = set()
         count = 0
         total_api = 0.0
         batch_size = 2000
         for item in items:
             obuma_id = str(item.get("venta_id", item.get("id", "")))
+            api_obuma_ids.add(obuma_id)
 
             rel_cliente_id = str(item.get("rel_cliente_id", "0"))
             cliente_db_id = cliente_cache.get(rel_cliente_id)
@@ -620,41 +624,63 @@ class SyncService:
             anulada = str(item.get("venta_anulada", "0")) == "1"
             estado = "Anulada" if anulada else item.get("venta_estado", "Vigente")
 
-            venta = VentaHistorico(
-                tenant_id=self.tenant_id,
-                obuma_id=obuma_id,
-                cliente_id=cliente_db_id,
-                vendedor_id=vendedor_id_val,
-                fecha=fecha,
-                tipo_documento=tipo_dcto,
-                folio=folio,
-                subtotal=neto,
-                impuestos=iva,
-                total=total,
-                estado=estado,
-                detalle=self._to_json(item),
-                costo_total=costo,
-                margen_neto=utilidad if utilidad else (neto - costo),
-                total_pagado=self._safe_float(item.get("venta_total_pagado", 0)),
-                total_por_pagar=self._safe_float(item.get("venta_total_por_pagar", 0)),
-                anulada=anulada,
-                observacion=item.get("venta_observacion", ""),
-            )
-            self.db.add(venta)
+            existing = existing_cache.get(obuma_id)
+            if existing:
+                existing.cliente_id = cliente_db_id
+                existing.vendedor_id = vendedor_id_val
+                existing.fecha = fecha
+                existing.tipo_documento = tipo_dcto
+                existing.folio = folio
+                existing.subtotal = neto
+                existing.impuestos = iva
+                existing.total = total
+                existing.estado = estado
+                existing.detalle = self._to_json(item)
+                existing.costo_total = costo
+                existing.margen_neto = utilidad if utilidad else (neto - costo)
+                existing.total_pagado = self._safe_float(item.get("venta_total_pagado", 0))
+                existing.total_por_pagar = self._safe_float(item.get("venta_total_por_pagar", 0))
+                existing.anulada = anulada
+                existing.observacion = item.get("venta_observacion", "")
+            else:
+                venta = VentaHistorico(
+                    tenant_id=self.tenant_id,
+                    obuma_id=obuma_id,
+                    cliente_id=cliente_db_id,
+                    vendedor_id=vendedor_id_val,
+                    fecha=fecha,
+                    tipo_documento=tipo_dcto,
+                    folio=folio,
+                    subtotal=neto,
+                    impuestos=iva,
+                    total=total,
+                    estado=estado,
+                    detalle=self._to_json(item),
+                    costo_total=costo,
+                    margen_neto=utilidad if utilidad else (neto - costo),
+                    total_pagado=self._safe_float(item.get("venta_total_pagado", 0)),
+                    total_por_pagar=self._safe_float(item.get("venta_total_por_pagar", 0)),
+                    anulada=anulada,
+                    observacion=item.get("venta_observacion", ""),
+                )
+                self.db.add(venta)
             count += 1
 
             if count % batch_size == 0:
                 self.db.commit()
                 logger.info(f"Ventas sync progress: {count}/{len(items)}")
 
-        self.db.commit()
-        db_count = self.db.query(VentaHistorico).count()
-        total_db_sum = self.db.query(VentaHistorico).with_entities(VentaHistorico.total).all()
-        total_db_val = sum(v[0] for v in total_db_sum if v[0])
+        stale_ids = set(existing_cache.keys()) - api_obuma_ids
+        if stale_ids:
+            self.db.query(VentaHistorico).filter(
+                VentaHistorico.obuma_id.in_(list(stale_ids)),
+                VentaHistorico.tenant_id == self.tenant_id
+            ).delete(synchronize_session=False)
 
-        self._log_sync("ventas", len(items), db_count,
-                        abs(len(items) - count),
-                        total_api=total_api, total_db=total_db_val)
+        self.db.commit()
+        db_count = self.db.query(VentaHistorico).filter(VentaHistorico.tenant_id == self.tenant_id).count()
+
+        self._log_sync("ventas", len(items), db_count, abs(len(items) - count))
         return {"synced": count, "total_api": len(items), "total_db": db_count}
 
     async def sync_ventas_items(self) -> dict:

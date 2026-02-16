@@ -351,8 +351,8 @@ if page == "Dashboard":
 
         st.markdown("---")
 
-        base_ventas_q = apply_dash_filters(db.query(VentaHistorico))
-        total_ventas = base_ventas_q.with_entities(func.sum(VentaHistorico.total)).scalar() or 0
+        base_ventas_q = apply_dash_filters(db.query(VentaHistorico).filter(VentaHistorico.anulada == False))
+        total_ventas = base_ventas_q.with_entities(func.sum(VentaHistorico.subtotal)).scalar() or 0
         total_margen = base_ventas_q.with_entities(func.sum(VentaHistorico.margen_neto)).scalar() or 0
         n_ventas = base_ventas_q.count()
         ventas_anuladas = apply_dash_filters(db.query(VentaHistorico).filter(VentaHistorico.anulada == True)).count()
@@ -404,8 +404,8 @@ if page == "Dashboard":
                 db.query(
                     extract('year', VentaHistorico.fecha).label("anio"),
                     extract('month', VentaHistorico.fecha).label("mes"),
-                    func.sum(VentaHistorico.total).label("total")
-                ).filter(VentaHistorico.fecha.isnot(None))
+                    func.sum(VentaHistorico.subtotal).label("total")
+                ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
             ).group_by("anio", "mes").order_by("anio", "mes").all()
 
             if monthly_sales:
@@ -431,9 +431,9 @@ if page == "Dashboard":
             top_vend = apply_dash_filters(
                 db.query(
                     VentaHistorico.vendedor_id,
-                    func.sum(VentaHistorico.total).label("total")
-                ).filter(VentaHistorico.vendedor_id.isnot(None), VentaHistorico.fecha.isnot(None))
-            ).group_by(VentaHistorico.vendedor_id).order_by(func.sum(VentaHistorico.total).desc()).limit(10).all()
+                    func.sum(VentaHistorico.subtotal).label("total")
+                ).filter(VentaHistorico.vendedor_id.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
+            ).group_by(VentaHistorico.vendedor_id).order_by(func.sum(VentaHistorico.subtotal).desc()).limit(10).all()
 
             if top_vend:
                 df_tv = pd.DataFrame([{
@@ -459,9 +459,9 @@ if page == "Dashboard":
             client_sales = apply_dash_filters(
                 db.query(
                     VentaHistorico.cliente_id,
-                    func.sum(VentaHistorico.total).label("total")
-                ).filter(VentaHistorico.cliente_id.isnot(None), VentaHistorico.fecha.isnot(None))
-            ).group_by(VentaHistorico.cliente_id).order_by(func.sum(VentaHistorico.total).desc()).all()
+                    func.sum(VentaHistorico.subtotal).label("total")
+                ).filter(VentaHistorico.cliente_id.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
+            ).group_by(VentaHistorico.cliente_id).order_by(func.sum(VentaHistorico.subtotal).desc()).all()
 
             if client_sales:
                 grand_total_abc = sum(c.total or 0 for c in client_sales)
@@ -576,8 +576,8 @@ if page == "Dashboard":
                 db.query(
                     extract('year', VentaHistorico.fecha).label("anio"),
                     extract('month', VentaHistorico.fecha).label("mes"),
-                    func.sum(VentaHistorico.total).label("total")
-                ).filter(VentaHistorico.fecha.isnot(None))
+                    func.sum(VentaHistorico.subtotal).label("total")
+                ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
             ).group_by("anio", "mes").order_by("anio", "mes").all()
 
             compras_q_monthly = db.query(
@@ -629,9 +629,9 @@ if page == "Dashboard":
                 db.query(
                     VentaHistorico.tipo_documento,
                     func.count(VentaHistorico.id).label("cantidad"),
-                    func.sum(VentaHistorico.total).label("total")
-                ).filter(VentaHistorico.tipo_documento.isnot(None), VentaHistorico.fecha.isnot(None))
-            ).group_by(VentaHistorico.tipo_documento).order_by(func.sum(VentaHistorico.total).desc()).all()
+                    func.sum(VentaHistorico.subtotal).label("total")
+                ).filter(VentaHistorico.tipo_documento.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
+            ).group_by(VentaHistorico.tipo_documento).order_by(func.sum(VentaHistorico.subtotal).desc()).all()
 
             if doc_types:
                 df_dt = pd.DataFrame([{
@@ -677,15 +677,15 @@ if page == "Dashboard":
             top_clientes_q = db.query(
                 ClienteFinal.nombre,
                 ClienteFinal.rut,
-                func.sum(VentaHistorico.total).label("total"),
+                func.sum(VentaHistorico.subtotal).label("total"),
                 func.sum(VentaHistorico.margen_neto).label("margen"),
                 func.count(VentaHistorico.id).label("transacciones")
             ).join(VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
-            ).filter(VentaHistorico.fecha.isnot(None))
+            ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
             top_clientes_q = apply_dash_filters(top_clientes_q, VentaHistorico)
             top_clientes = top_clientes_q.group_by(
                 ClienteFinal.nombre, ClienteFinal.rut
-            ).order_by(func.sum(VentaHistorico.total).desc()).limit(15).all()
+            ).order_by(func.sum(VentaHistorico.subtotal).desc()).limit(15).all()
 
             if top_clientes:
                 df_top = pd.DataFrame([{
@@ -772,6 +772,20 @@ elif page == "Vendedores":
                 actual_maq = 0
                 actual_total = actual_rep_result + actual_maq
 
+                total_cartera_count = db.query(func.count(VendedorCartera.id)).filter(
+                    VendedorCartera.empleado_obuma_id == vid,
+                    VendedorCartera.activo == True
+                ).scalar() or 0
+
+                clientes_atendidos = db.query(func.count(func.distinct(VentaHistorico.cliente_id))).filter(
+                    VentaHistorico.vendedor_id == vid,
+                    extract('year', VentaHistorico.fecha) == rend_anio,
+                    extract('month', VentaHistorico.fecha) == rend_mes,
+                    VentaHistorico.anulada == False
+                ).scalar() or 0
+
+                cobertura_pct = (clientes_atendidos / total_cartera_count * 100) if total_cartera_count > 0 else 0
+
                 summary_meta_rep += meta_rep
                 summary_meta_maq += meta_maq
                 summary_actual_rep += actual_rep_result
@@ -805,19 +819,23 @@ elif page == "Vendedores":
                 </div>
                 """, unsafe_allow_html=True)
 
-                vc1, vc2, vc3 = st.columns(3)
+                vc1, vc2, vc3, vc4 = st.columns(4)
                 with vc1:
-                    st.caption(f"🔧 Repuestos: {format_clp(actual_rep_result)} / {format_clp(meta_rep)}")
+                    st.caption(f"Repuestos: {format_clp(actual_rep_result)} / {format_clp(meta_rep)}")
                     prog_rep = min(pct_rep / 100, 1.0)
                     st.progress(prog_rep if prog_rep >= 0 else 0)
                 with vc2:
-                    st.caption(f"🏗️ Maquinaria: {format_clp(actual_maq)} / {format_clp(meta_maq)}")
+                    st.caption(f"Maquinaria: {format_clp(actual_maq)} / {format_clp(meta_maq)}")
                     prog_maq = min(pct_maq / 100, 1.0)
                     st.progress(prog_maq if prog_maq >= 0 else 0)
                 with vc3:
-                    st.caption(f"📊 Total: {format_clp(actual_total)} / {format_clp(meta_total)}")
+                    st.caption(f"Total: {format_clp(actual_total)} / {format_clp(meta_total)}")
                     prog_total = min(pct_total / 100, 1.0)
                     st.progress(prog_total if prog_total >= 0 else 0)
+                with vc4:
+                    st.caption(f"Clientes: {clientes_atendidos} / {total_cartera_count} ({cobertura_pct:.0f}%)")
+                    prog_cob = min(cobertura_pct / 100, 1.0)
+                    st.progress(prog_cob if prog_cob >= 0 else 0)
 
                 st.markdown("")
 
@@ -1018,7 +1036,7 @@ elif page == "Vendedores":
 
                     for vc, cli in cartera_cruce:
                         ventas_q = db.query(
-                            func.sum(VentaHistorico.total).label("total_ventas"),
+                            func.sum(VentaHistorico.subtotal).label("total_ventas"),
                             func.count(VentaHistorico.id).label("num_docs")
                         ).filter(
                             VentaHistorico.cliente_id == cli.id,
@@ -1525,10 +1543,11 @@ elif page == "Clientes":
                     st.markdown('<p class="section-header">Top Clientes por Facturacion</p>', unsafe_allow_html=True)
                     top_cl = db.query(
                         ClienteFinal.nombre,
-                        func.sum(VentaHistorico.total).label("total")
+                        func.sum(VentaHistorico.subtotal).label("total")
                     ).join(VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
+                    ).filter(VentaHistorico.anulada == False
                     ).group_by(ClienteFinal.nombre
-                    ).order_by(func.sum(VentaHistorico.total).desc()).limit(10).all()
+                    ).order_by(func.sum(VentaHistorico.subtotal).desc()).limit(10).all()
 
                     if top_cl:
                         df_tcl = pd.DataFrame([{"Cliente": c.nombre, "Total": c.total or 0} for c in top_cl])
@@ -1568,7 +1587,7 @@ elif page == "Clientes":
                 data = []
                 for c in clientes:
                     n_ventas = db.query(VentaHistorico).filter(VentaHistorico.cliente_id == c.id).count()
-                    total = db.query(func.sum(VentaHistorico.total)).filter(VentaHistorico.cliente_id == c.id).scalar() or 0
+                    total = db.query(func.sum(VentaHistorico.subtotal)).filter(VentaHistorico.cliente_id == c.id, VentaHistorico.anulada == False).scalar() or 0
                     data.append({
                         "Nombre": c.nombre,
                         "RUT": c.rut or "-",
