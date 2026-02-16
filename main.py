@@ -5,6 +5,7 @@ import threading
 import time
 import socket
 import logging
+import signal
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -16,6 +17,25 @@ FASTAPI_PORT = 8000
 NGINX_PORT = 5000
 MAX_RESTARTS = 10
 RESTART_DELAY = 5
+
+processes = []
+running = True
+
+
+def signal_handler(sig, frame):
+    global running
+    running = False
+    logger.info("Shutting down...")
+    for p in processes:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
 
 
 def wait_for_port(port, host="127.0.0.1", timeout=60):
@@ -32,26 +52,33 @@ def wait_for_port(port, host="127.0.0.1", timeout=60):
 
 def run_fastapi_with_restart():
     restarts = 0
-    while restarts < MAX_RESTARTS:
+    while restarts < MAX_RESTARTS and running:
         try:
             logger.info(f"FastAPI iniciando (intento {restarts + 1})...")
-            import uvicorn
-            from src.api.main import app
-            uvicorn.run(app, host="127.0.0.1", port=FASTAPI_PORT, log_level="info")
+            proc = subprocess.Popen([
+                sys.executable, "-c",
+                "import uvicorn; from src.api.main import app; uvicorn.run(app, host='127.0.0.1', port=8000, log_level='info')"
+            ])
+            processes.append(proc)
+            proc.wait()
+            if not running:
+                break
+            logger.error(f"FastAPI salio con codigo {proc.returncode}")
         except Exception as e:
             logger.error(f"FastAPI crash: {e}")
         restarts += 1
-        if restarts < MAX_RESTARTS:
+        if restarts < MAX_RESTARTS and running:
             logger.warning(f"FastAPI reiniciando en {RESTART_DELAY}s (intento {restarts + 1}/{MAX_RESTARTS})...")
             time.sleep(RESTART_DELAY)
-    logger.error("FastAPI alcanzo el maximo de reinicios.")
+    if running:
+        logger.error("FastAPI alcanzo el maximo de reinicios.")
 
 
 def run_streamlit_with_restart():
     restarts = 0
-    while restarts < MAX_RESTARTS:
+    while restarts < MAX_RESTARTS and running:
         logger.info(f"Streamlit iniciando (intento {restarts + 1})...")
-        result = subprocess.run([
+        proc = subprocess.Popen([
             sys.executable, "-m", "streamlit", "run",
             "src/dashboard/app.py",
             f"--server.port={STREAMLIT_PORT}",
@@ -62,13 +89,17 @@ def run_streamlit_with_restart():
             "--server.enableXsrfProtection=false",
             "--server.enableWebsocketCompression=false",
         ])
-        if result.returncode != 0:
-            logger.error(f"Streamlit salio con codigo {result.returncode}")
+        processes.append(proc)
+        proc.wait()
+        if not running:
+            break
+        logger.error(f"Streamlit salio con codigo {proc.returncode}")
         restarts += 1
-        if restarts < MAX_RESTARTS:
+        if restarts < MAX_RESTARTS and running:
             logger.warning(f"Streamlit reiniciando en {RESTART_DELAY}s (intento {restarts + 1}/{MAX_RESTARTS})...")
             time.sleep(RESTART_DELAY)
-    logger.error("Streamlit alcanzo el maximo de reinicios.")
+    if running:
+        logger.error("Streamlit alcanzo el maximo de reinicios.")
 
 
 def setup_tmp_dirs():
@@ -88,27 +119,28 @@ def run_nginx():
     )
     if result.returncode != 0:
         logger.error(f"Nginx config test failed: {result.stderr}")
-        return
+        return None
 
     logger.info("Nginx config OK, starting...")
     proc = subprocess.Popen(
         ["nginx", "-g", "daemon off;", "-c", NGINX_CONF, "-e", "/tmp/nginx_error.log"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
+    processes.append(proc)
 
     def log_nginx_stderr():
         for line in proc.stderr:
             logger.info(f"NGINX: {line.decode().strip()}")
 
     threading.Thread(target=log_nginx_stderr, daemon=True).start()
-    proc.wait()
+    return proc
 
 
 if __name__ == "__main__":
-    fastapi_thread = threading.Thread(target=run_fastapi_with_restart, daemon=True)
+    fastapi_thread = threading.Thread(target=run_fastapi_with_restart, daemon=False)
     fastapi_thread.start()
 
-    streamlit_thread = threading.Thread(target=run_streamlit_with_restart, daemon=True)
+    streamlit_thread = threading.Thread(target=run_streamlit_with_restart, daemon=False)
     streamlit_thread.start()
 
     logger.info("Esperando que Streamlit y FastAPI esten listos...")
@@ -123,4 +155,13 @@ if __name__ == "__main__":
         logger.error(f"FastAPI no respondio en 90 segundos (puerto {FASTAPI_PORT})")
 
     logger.info(f"Nginx reverse proxy iniciando en 0.0.0.0:{NGINX_PORT}")
-    run_nginx()
+    nginx_proc = run_nginx()
+
+    try:
+        while running:
+            time.sleep(5)
+            if nginx_proc and nginx_proc.poll() is not None:
+                logger.warning("Nginx se detuvo, reiniciando...")
+                nginx_proc = run_nginx()
+    except KeyboardInterrupt:
+        signal_handler(None, None)
