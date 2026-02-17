@@ -7,7 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract, distinct
+from sqlalchemy import func, extract, distinct, case as sql_case
 from src.models.models import VentaHistorico, ClienteFinal, Empleado, ReporteGenerado, VendedorCartera
 
 logger = logging.getLogger(__name__)
@@ -122,7 +122,7 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
     for vc, cli in cartera_entries:
         ventas_result = db.query(
             func.sum(
-                func.case(
+                sql_case(
                     (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES), -VentaHistorico.subtotal),
                     else_=VentaHistorico.subtotal
                 )
@@ -513,7 +513,7 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
         stats = db.query(
             func.count(distinct(VentaHistorico.cliente_id)),
             func.sum(
-                func.case(
+                sql_case(
                     (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES), -VentaHistorico.subtotal),
                     else_=VentaHistorico.subtotal
                 )
