@@ -36,6 +36,10 @@ SEGMENTO_FONT = Font(name="Calibri", bold=True, size=11)
 MONTH_NAMES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
                "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
 
+BILLING_DOC_TYPES = ['Factura Electr.', 'Factura Exenta', 'Boleta Electr.']
+NC_DOC_TYPES = ['Nota Credito']
+VALID_DOC_TYPES = BILLING_DOC_TYPES + NC_DOC_TYPES
+
 
 def _style_header(ws, row, col_count):
     for col in range(1, col_count + 1):
@@ -117,14 +121,20 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
 
     for vc, cli in cartera_entries:
         ventas_result = db.query(
-            func.sum(VentaHistorico.total).label("total_ventas"),
+            func.sum(
+                func.case(
+                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES), -VentaHistorico.subtotal),
+                    else_=VentaHistorico.subtotal
+                )
+            ).label("total_ventas"),
             func.count(VentaHistorico.id).label("num_docs")
         ).filter(
             VentaHistorico.cliente_id == cli.id,
             VentaHistorico.vendedor_id == vendedor_obuma_id,
             VentaHistorico.anulada == False,
             VentaHistorico.fecha >= date_from,
-            VentaHistorico.fecha <= date_to
+            VentaHistorico.fecha <= date_to,
+            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
         ).first()
 
         total_ventas = ventas_result.total_ventas or 0
@@ -270,7 +280,8 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
         VentaHistorico.vendedor_id == vendedor_obuma_id,
         VentaHistorico.anulada != True,
         VentaHistorico.fecha >= date_from,
-        VentaHistorico.fecha <= date_to
+        VentaHistorico.fecha <= date_to,
+        VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
     ).all()
 
     if not ventas:
@@ -319,7 +330,11 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
 
         if ckey and v.fecha:
             month = v.fecha.month
-            client_data[ckey][month] += (v.subtotal or 0)
+            amount = v.subtotal or 0
+            if v.tipo_documento in NC_DOC_TYPES:
+                client_data[ckey][month] -= amount
+            else:
+                client_data[ckey][month] += amount
 
     rows = []
     for cid, monthly in client_data.items():
@@ -497,12 +512,18 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
 
         stats = db.query(
             func.count(distinct(VentaHistorico.cliente_id)),
-            func.sum(VentaHistorico.subtotal)
+            func.sum(
+                func.case(
+                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES), -VentaHistorico.subtotal),
+                    else_=VentaHistorico.subtotal
+                )
+            )
         ).filter(
             VentaHistorico.vendedor_id == vid,
             VentaHistorico.anulada != True,
             VentaHistorico.fecha >= date_from,
-            VentaHistorico.fecha <= date_to
+            VentaHistorico.fecha <= date_to,
+            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
         ).first()
 
         num_clientes = stats[0] or 0

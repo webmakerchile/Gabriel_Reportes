@@ -5,12 +5,20 @@ Plataforma de Business Intelligence para Gabriel Hoyos, quien gestiona multiples
 
 ## Architecture
 - **Backend**: FastAPI (puerto 8000) - API RESTful con todos los endpoints de negocio
-- **Frontend**: Streamlit (puerto 5000) - Dashboard interactivo de control
+- **Frontend**: Streamlit (puerto 5000, directo sin nginx) - Dashboard interactivo de control
 - **Database**: PostgreSQL - Single Source of Truth con tablas historicas y datos completos de Obuma
 - **ETL**: Modulo Python para consumir API de Obuma (23 endpoints sincronizados automaticamente)
 - **Scheduler**: APScheduler - Generacion automatica de reportes Excel a las 23:50 hora Chile
 - **Reports**: openpyxl - Generacion de reportes Excel profesionales
 - **API Catalog**: Registro completo de 30 endpoints de Obuma en base de datos para automatizaciones
+
+## CRITICAL: Document Type Filtering
+- Obuma API returns DUPLICATE sales: "Tipo 4" (guias despacho/pre-facturas) + "Factura Electr." (facturas reales) for the SAME transaction
+- ALL ventas queries MUST filter by VALID_DOC_TYPES = ['Factura Electr.', 'Factura Exenta', 'Boleta Electr.', 'Nota Credito']
+- "Tipo 4" documents MUST be EXCLUDED (they are pre-invoices that become Facturas)
+- "Nota Credito" amounts MUST be SUBTRACTED (not added) from totals
+- This applies to: Dashboard KPIs, charts, Excel reports, vendedor metrics, cartera analysis
+- Constants defined in: excel_generator.py (BILLING_DOC_TYPES, NC_DOC_TYPES, VALID_DOC_TYPES) and dashboard/app.py (module-level _G variants + local in page_dashboard)
 
 ## Project Structure
 ```

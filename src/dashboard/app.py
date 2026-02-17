@@ -4,7 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 from io import BytesIO
-from sqlalchemy import func, extract, distinct
+from sqlalchemy import func, extract, distinct, case as sql_case
 import os
 import sys
 import asyncio
@@ -12,6 +12,10 @@ import asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 TRACKED_VENDEDOR_IDS = ["28856", "28886", "28887", "28891", "28892"]
+
+BILLING_DOC_TYPES_G = ['Factura Electr.', 'Factura Exenta', 'Boleta Electr.']
+NC_DOC_TYPES_G = ['Nota Credito']
+VALID_DOC_TYPES_G = BILLING_DOC_TYPES_G + NC_DOC_TYPES_G
 
 from src.database import SessionLocal, engine, Base
 from src.models.models import (
@@ -340,6 +344,19 @@ if page == "Dashboard":
                     if f"{e.nombre} ({e.cargo or 'Sin cargo'})" == sel:
                         selected_vendedor_ids.append(e.obuma_id)
 
+        BILLING_DOC_TYPES = ['Factura Electr.', 'Factura Exenta', 'Boleta Electr.']
+        NC_DOC_TYPES = ['Nota Credito']
+        VALID_DOC_TYPES = BILLING_DOC_TYPES + NC_DOC_TYPES
+
+        def neto_sum():
+            from sqlalchemy import case as sql_case
+            return func.sum(
+                sql_case(
+                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES), -VentaHistorico.subtotal),
+                    else_=VentaHistorico.subtotal
+                )
+            )
+
         def apply_dash_filters(query, model=VentaHistorico):
             if dash_date_from:
                 query = query.filter(func.date(model.fecha) >= dash_date_from)
@@ -351,8 +368,11 @@ if page == "Dashboard":
 
         st.markdown("---")
 
-        base_ventas_q = apply_dash_filters(db.query(VentaHistorico).filter(VentaHistorico.anulada == False))
-        total_ventas = base_ventas_q.with_entities(func.sum(VentaHistorico.subtotal)).scalar() or 0
+        base_ventas_q = apply_dash_filters(db.query(VentaHistorico).filter(
+            VentaHistorico.anulada == False,
+            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
+        ))
+        total_ventas = base_ventas_q.with_entities(neto_sum()).scalar() or 0
         total_margen = base_ventas_q.with_entities(func.sum(VentaHistorico.margen_neto)).scalar() or 0
         n_ventas = base_ventas_q.count()
         ventas_anuladas = apply_dash_filters(db.query(VentaHistorico).filter(VentaHistorico.anulada == True)).count()
@@ -404,8 +424,9 @@ if page == "Dashboard":
                 db.query(
                     extract('year', VentaHistorico.fecha).label("anio"),
                     extract('month', VentaHistorico.fecha).label("mes"),
-                    func.sum(VentaHistorico.subtotal).label("total")
-                ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
+                    neto_sum().label("total")
+                ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False,
+                         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES))
             ).group_by("anio", "mes").order_by("anio", "mes").all()
 
             if monthly_sales:
@@ -431,9 +452,10 @@ if page == "Dashboard":
             top_vend = apply_dash_filters(
                 db.query(
                     VentaHistorico.vendedor_id,
-                    func.sum(VentaHistorico.subtotal).label("total")
-                ).filter(VentaHistorico.vendedor_id.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
-            ).group_by(VentaHistorico.vendedor_id).order_by(func.sum(VentaHistorico.subtotal).desc()).limit(10).all()
+                    neto_sum().label("total")
+                ).filter(VentaHistorico.vendedor_id.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False,
+                         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES))
+            ).group_by(VentaHistorico.vendedor_id).order_by(neto_sum().desc()).limit(10).all()
 
             if top_vend:
                 df_tv = pd.DataFrame([{
@@ -459,9 +481,10 @@ if page == "Dashboard":
             client_sales = apply_dash_filters(
                 db.query(
                     VentaHistorico.cliente_id,
-                    func.sum(VentaHistorico.subtotal).label("total")
-                ).filter(VentaHistorico.cliente_id.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
-            ).group_by(VentaHistorico.cliente_id).order_by(func.sum(VentaHistorico.subtotal).desc()).all()
+                    neto_sum().label("total")
+                ).filter(VentaHistorico.cliente_id.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False,
+                         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES))
+            ).group_by(VentaHistorico.cliente_id).order_by(neto_sum().desc()).all()
 
             if client_sales:
                 grand_total_abc = sum(c.total or 0 for c in client_sales)
@@ -576,8 +599,9 @@ if page == "Dashboard":
                 db.query(
                     extract('year', VentaHistorico.fecha).label("anio"),
                     extract('month', VentaHistorico.fecha).label("mes"),
-                    func.sum(VentaHistorico.subtotal).label("total")
-                ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
+                    neto_sum().label("total")
+                ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False,
+                         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES))
             ).group_by("anio", "mes").order_by("anio", "mes").all()
 
             compras_q_monthly = db.query(
@@ -630,7 +654,8 @@ if page == "Dashboard":
                     VentaHistorico.tipo_documento,
                     func.count(VentaHistorico.id).label("cantidad"),
                     func.sum(VentaHistorico.subtotal).label("total")
-                ).filter(VentaHistorico.tipo_documento.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
+                ).filter(VentaHistorico.tipo_documento.isnot(None), VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False,
+                         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES))
             ).group_by(VentaHistorico.tipo_documento).order_by(func.sum(VentaHistorico.subtotal).desc()).all()
 
             if doc_types:
@@ -677,15 +702,16 @@ if page == "Dashboard":
             top_clientes_q = db.query(
                 ClienteFinal.nombre,
                 ClienteFinal.rut,
-                func.sum(VentaHistorico.subtotal).label("total"),
+                neto_sum().label("total"),
                 func.sum(VentaHistorico.margen_neto).label("margen"),
                 func.count(VentaHistorico.id).label("transacciones")
             ).join(VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
-            ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False)
+            ).filter(VentaHistorico.fecha.isnot(None), VentaHistorico.anulada == False,
+                     VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES))
             top_clientes_q = apply_dash_filters(top_clientes_q, VentaHistorico)
             top_clientes = top_clientes_q.group_by(
                 ClienteFinal.nombre, ClienteFinal.rut
-            ).order_by(func.sum(VentaHistorico.subtotal).desc()).limit(15).all()
+            ).order_by(neto_sum().desc()).limit(15).all()
 
             if top_clientes:
                 df_top = pd.DataFrame([{
@@ -762,11 +788,17 @@ elif page == "Vendedores":
                 meta_maq = meta.meta_maquinaria if meta else 0
                 meta_total = meta_rep + meta_maq
 
-                actual_rep_result = db.query(func.sum(VentaHistorico.subtotal)).filter(
+                actual_rep_result = db.query(func.sum(
+                    sql_case(
+                        (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                        else_=VentaHistorico.subtotal
+                    )
+                )).filter(
                     VentaHistorico.vendedor_id == vid,
                     extract('year', VentaHistorico.fecha) == rend_anio,
                     extract('month', VentaHistorico.fecha) == rend_mes,
-                    VentaHistorico.anulada == False
+                    VentaHistorico.anulada == False,
+                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                 ).scalar() or 0
 
                 actual_maq = 0
@@ -899,11 +931,17 @@ elif page == "Vendedores":
                     st.markdown(f"**{len(cartera_items)} clientes activos asignados**")
                     rows = []
                     for vc, cli in cartera_items:
-                        ventas_12m = db.query(func.sum(VentaHistorico.subtotal)).filter(
+                        ventas_12m = db.query(func.sum(
+                            sql_case(
+                                (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                                else_=VentaHistorico.subtotal
+                            )
+                        )).filter(
                             VentaHistorico.cliente_id == cli.id,
                             VentaHistorico.vendedor_id == sel_cart_vid,
                             VentaHistorico.anulada == False,
-                            func.date(VentaHistorico.fecha) >= twelve_months_ago
+                            func.date(VentaHistorico.fecha) >= twelve_months_ago,
+                            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                         ).scalar() or 0
 
                         rows.append({
@@ -1036,13 +1074,19 @@ elif page == "Vendedores":
 
                     for vc, cli in cartera_cruce:
                         ventas_q = db.query(
-                            func.sum(VentaHistorico.subtotal).label("total_ventas"),
+                            func.sum(
+                                sql_case(
+                                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                                    else_=VentaHistorico.subtotal
+                                )
+                            ).label("total_ventas"),
                             func.count(VentaHistorico.id).label("num_docs")
                         ).filter(
                             VentaHistorico.cliente_id == cli.id,
                             VentaHistorico.vendedor_id == cruce_sel_vid,
                             VentaHistorico.anulada == False,
-                            extract('year', VentaHistorico.fecha) == cruce_anio
+                            extract('year', VentaHistorico.fecha) == cruce_anio,
+                            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                         )
                         if cruce_mes_sel != "Todo el año":
                             mes_idx = MONTH_LABELS.index(cruce_mes_sel) + 1
@@ -1369,7 +1413,10 @@ elif page == "Ventas":
             ventas = query.order_by(VentaHistorico.fecha.desc()).all()
 
             if ventas:
-                total_neto = sum(v.subtotal or 0 for v in ventas)
+                total_neto = sum(
+                    (-(v.subtotal or 0) if v.tipo_documento in NC_DOC_TYPES_G else (v.subtotal or 0))
+                    for v in ventas if v.tipo_documento in VALID_DOC_TYPES_G
+                )
                 total_total = sum(v.total or 0 for v in ventas)
                 total_margen = sum(v.margen_neto or 0 for v in ventas)
 
@@ -1543,11 +1590,22 @@ elif page == "Clientes":
                     st.markdown('<p class="section-header">Top Clientes por Facturacion</p>', unsafe_allow_html=True)
                     top_cl = db.query(
                         ClienteFinal.nombre,
-                        func.sum(VentaHistorico.subtotal).label("total")
+                        func.sum(
+                            sql_case(
+                                (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                                else_=VentaHistorico.subtotal
+                            )
+                        ).label("total")
                     ).join(VentaHistorico, VentaHistorico.cliente_id == ClienteFinal.id
-                    ).filter(VentaHistorico.anulada == False
+                    ).filter(VentaHistorico.anulada == False,
+                             VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                     ).group_by(ClienteFinal.nombre
-                    ).order_by(func.sum(VentaHistorico.subtotal).desc()).limit(10).all()
+                    ).order_by(func.sum(
+                        sql_case(
+                            (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                            else_=VentaHistorico.subtotal
+                        )
+                    ).desc()).limit(10).all()
 
                     if top_cl:
                         df_tcl = pd.DataFrame([{"Cliente": c.nombre, "Total": c.total or 0} for c in top_cl])
@@ -1587,7 +1645,13 @@ elif page == "Clientes":
                 data = []
                 for c in clientes:
                     n_ventas = db.query(VentaHistorico).filter(VentaHistorico.cliente_id == c.id).count()
-                    total = db.query(func.sum(VentaHistorico.subtotal)).filter(VentaHistorico.cliente_id == c.id, VentaHistorico.anulada == False).scalar() or 0
+                    total = db.query(func.sum(
+                        sql_case(
+                            (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                            else_=VentaHistorico.subtotal
+                        )
+                    )).filter(VentaHistorico.cliente_id == c.id, VentaHistorico.anulada == False,
+                              VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)).scalar() or 0
                     data.append({
                         "Nombre": c.nombre,
                         "RUT": c.rut or "-",
