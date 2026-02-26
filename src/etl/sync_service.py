@@ -10,7 +10,8 @@ from src.models.models import (
     Proveedor, ClienteContacto, ClienteDireccion, Empleado, Remuneracion,
     VentaItem, VentaCotizacion, VentaCobro, VentaDte,
     CompraOC, CompraPago, CrmLead,
-    ProductoCategoria, ProductoSubCategoria, ProductoFabricante, ProductoPrecio
+    ProductoCategoria, ProductoSubCategoria, ProductoFabricante, ProductoPrecio,
+    VendedorCartera
 )
 
 logger = logging.getLogger(__name__)
@@ -224,7 +225,74 @@ class SyncService:
             raise
         db_count = self.db.query(ClienteFinal).filter(ClienteFinal.tenant_id == self.tenant_id).count()
         self._log_sync("clientes", len(items), db_count, 0)
-        return {"synced": count, "total_api": len(items), "total_db": db_count}
+
+        cartera_result = self._sync_cartera_from_clientes()
+
+        return {"synced": count, "total_api": len(items), "total_db": db_count, "cartera": cartera_result}
+
+    def _sync_cartera_from_clientes(self) -> dict:
+        TRACKED_VENDEDORES = ['28856', '28886', '28887', '28891', '28892']
+        added = 0
+        reactivated = 0
+        deactivated = 0
+
+        clientes = self.db.query(ClienteFinal).filter(
+            ClienteFinal.tenant_id == self.tenant_id,
+            ClienteFinal.data_json.isnot(None)
+        ).all()
+
+        for cli in clientes:
+            try:
+                data = json.loads(cli.data_json) if isinstance(cli.data_json, str) else cli.data_json
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            rel_usuario_id = str(data.get('rel_usuario_id', '0') or '0')
+            if rel_usuario_id == '0' or rel_usuario_id not in TRACKED_VENDEDORES:
+                continue
+
+            old_assignments = self.db.query(VendedorCartera).filter(
+                VendedorCartera.tenant_id == self.tenant_id,
+                VendedorCartera.cliente_id == cli.id,
+                VendedorCartera.empleado_obuma_id != rel_usuario_id,
+                VendedorCartera.activo == True
+            ).all()
+            for old in old_assignments:
+                old.activo = False
+                old.fecha_baja = datetime.now().date()
+                deactivated += 1
+
+            existing = self.db.query(VendedorCartera).filter(
+                VendedorCartera.tenant_id == self.tenant_id,
+                VendedorCartera.empleado_obuma_id == rel_usuario_id,
+                VendedorCartera.cliente_id == cli.id
+            ).first()
+
+            if existing:
+                if not existing.activo:
+                    existing.activo = True
+                    existing.fecha_baja = None
+                    reactivated += 1
+            else:
+                vc = VendedorCartera(
+                    tenant_id=self.tenant_id,
+                    empleado_obuma_id=rel_usuario_id,
+                    cliente_id=cli.id,
+                    fecha_asignacion=datetime.now().date(),
+                    activo=True
+                )
+                self.db.add(vc)
+                added += 1
+
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.error("Error syncing cartera from clientes", exc_info=True)
+            return {"error": "commit failed"}
+
+        logger.info(f"Cartera sync: {added} added, {reactivated} reactivated, {deactivated} deactivated")
+        return {"added": added, "reactivated": reactivated, "deactivated": deactivated}
 
     async def sync_clientes_contactos(self) -> dict:
         data = await self.client.get_clientes_contactos_all()

@@ -132,8 +132,8 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
             VentaHistorico.cliente_id == cli.id,
             VentaHistorico.vendedor_id == vendedor_obuma_id,
             VentaHistorico.anulada == False,
-            VentaHistorico.fecha >= date_from,
-            VentaHistorico.fecha <= date_to,
+            func.date(VentaHistorico.fecha) >= date_from,
+            func.date(VentaHistorico.fecha) <= date_to,
             VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
         ).first()
 
@@ -279,13 +279,20 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
     ventas = db.query(VentaHistorico).filter(
         VentaHistorico.vendedor_id == vendedor_obuma_id,
         VentaHistorico.anulada != True,
-        VentaHistorico.fecha >= date_from,
-        VentaHistorico.fecha <= date_to,
+        func.date(VentaHistorico.fecha) >= date_from,
+        func.date(VentaHistorico.fecha) <= date_to,
         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
     ).all()
 
-    if not ventas:
-        logger.info(f"No sales found for vendedor {empleado.nombre} ({vendedor_obuma_id}) in range {date_from} to {date_to}")
+    cartera_clients = db.query(VendedorCartera, ClienteFinal).join(
+        ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
+    ).filter(
+        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+        VendedorCartera.activo == True
+    ).all()
+
+    if not ventas and not cartera_clients:
+        logger.info(f"No sales or cartera found for vendedor {empleado.nombre} ({vendedor_obuma_id}) in range {date_from} to {date_to}")
         return None
 
     active_months = set()
@@ -300,6 +307,11 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
 
     client_data = defaultdict(lambda: defaultdict(float))
     client_info = {}
+
+    for vc, cli in cartera_clients:
+        ckey = f"db_{cli.id}"
+        if ckey not in client_info:
+            client_info[ckey] = {'rut': cli.rut or '', 'nombre': cli.nombre or ''}
 
     for v in ventas:
         ckey = None
@@ -336,8 +348,11 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
             else:
                 client_data[ckey][month] += amount
 
+    all_client_keys = set(client_info.keys()) | set(client_data.keys())
+
     rows = []
-    for cid, monthly in client_data.items():
+    for cid in all_client_keys:
+        monthly = client_data.get(cid, defaultdict(float))
         info = client_info.get(cid, {'rut': '', 'nombre': ''})
         month_values = [monthly.get(m, 0) if m in active_months else 0 for m in range(1, 13)]
         total = sum(month_values)
@@ -498,8 +513,8 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
     vendedor_ids = db.query(distinct(VentaHistorico.vendedor_id)).filter(
         VentaHistorico.vendedor_id != None,
         VentaHistorico.anulada != True,
-        VentaHistorico.fecha >= date_from,
-        VentaHistorico.fecha <= date_to
+        func.date(VentaHistorico.fecha) >= date_from,
+        func.date(VentaHistorico.fecha) <= date_to
     ).all()
     vendedor_ids = [vid[0] for vid in vendedor_ids if vid[0]]
 
@@ -521,8 +536,8 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
         ).filter(
             VentaHistorico.vendedor_id == vid,
             VentaHistorico.anulada != True,
-            VentaHistorico.fecha >= date_from,
-            VentaHistorico.fecha <= date_to,
+            func.date(VentaHistorico.fecha) >= date_from,
+            func.date(VentaHistorico.fecha) <= date_to,
             VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
         ).first()
 

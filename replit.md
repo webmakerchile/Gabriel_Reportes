@@ -19,6 +19,13 @@ Plataforma de Business Intelligence para Gabriel Hoyos, quien gestiona multiples
 - "Nota Credito" amounts MUST be SUBTRACTED (not added) from totals
 - This applies to: Dashboard KPIs, charts, Excel reports, vendedor metrics, cartera analysis
 - Constants defined in: excel_generator.py (BILLING_DOC_TYPES, NC_DOC_TYPES, VALID_DOC_TYPES) and dashboard/app.py (module-level _G variants + local in page_dashboard)
+- Excel report date filters use func.date() cast for consistency with dashboard extract() queries
+
+## Cartera Auto-Population
+- VendedorCartera is auto-populated from ClienteFinal.data_json.rel_usuario_id during sync_clientes
+- Only tracked vendedores (28856, 28886, 28887, 28891, 28892) are processed
+- Excel report evolution sheet includes ALL cartera clients (with and without sales)
+- Clients with $0 sales appear at bottom with yellow-filled zero cells
 
 ## Project Structure
 ```
