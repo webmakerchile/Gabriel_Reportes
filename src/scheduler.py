@@ -15,15 +15,24 @@ TRACKED_VENDEDOR_IDS = ["28856", "28886", "28887", "28891", "28892"]
 
 
 def scheduled_sync_and_report():
-    logger.info("Ejecutando sincronización y generación de reportes programados...")
+    logger.info("Ejecutando sincronización diaria (ligera)...")
     db = SessionLocal()
     try:
         service = SyncService(db)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        results = loop.run_until_complete(service.sync_all())
+
+        results = {}
+        results["clientes"] = loop.run_until_complete(service.sync_clientes())
+        logger.info(f"Clientes sync: {results['clientes'].get('synced', '?')}")
+        results["ventas"] = loop.run_until_complete(service.sync_ventas())
+        logger.info(f"Ventas sync: {results['ventas'].get('synced', '?')}")
+        results["ventas_cobros"] = loop.run_until_complete(service.sync_ventas_cobros())
+        results["empleados"] = loop.run_until_complete(service.sync_empleados())
+        results["productos"] = loop.run_until_complete(service.sync_productos())
+
         loop.close()
-        logger.info(f"Sincronización completada: {results}")
+        logger.info(f"Sincronización diaria completada")
 
         filepaths = generate_all_vendedor_reports(db)
         logger.info(f"Reportes por vendedor generados: {len(filepaths)} archivos")
