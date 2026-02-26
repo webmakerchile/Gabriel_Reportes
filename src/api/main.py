@@ -24,6 +24,41 @@ app = FastAPI(
 )
 
 
+VENDEDOR_METAS_DEFAULT = {
+    "28856": {"rep": 58_900_000, "maq": 2_000_000},
+    "28886": {"rep": 89_900_000, "maq": 4_000_000},
+    "28887": {"rep": 58_900_000, "maq": 4_000_000},
+    "28891": {"rep": 36_900_000, "maq": 2_000_000},
+    "28892": {"rep": 36_900_000, "maq": 2_000_000},
+}
+
+
+def _seed_vendedor_metas(db):
+    from src.models.models import VendedorMeta
+    today = date.today()
+    start_year = 2025
+    start_month = 3
+    for vid, vals in VENDEDOR_METAS_DEFAULT.items():
+        y, m = start_year, start_month
+        while (y, m) <= (today.year, today.month):
+            exists = db.query(VendedorMeta).filter(
+                VendedorMeta.empleado_obuma_id == vid,
+                VendedorMeta.anio == y,
+                VendedorMeta.mes == m
+            ).first()
+            if not exists:
+                db.add(VendedorMeta(
+                    empleado_obuma_id=vid, anio=y, mes=m,
+                    meta_repuestos=vals["rep"], meta_maquinaria=vals["maq"]
+                ))
+            m += 1
+            if m > 12:
+                m = 1
+                y += 1
+    db.commit()
+    logger.info("Vendedor metas seeded/verified")
+
+
 def _heavy_init():
     try:
         Base.metadata.create_all(bind=engine)
@@ -39,6 +74,7 @@ def _heavy_init():
         db = SessionLocal()
         try:
             seed_api_catalog(db)
+            _seed_vendedor_metas(db)
         finally:
             db.close()
         start_scheduler()
