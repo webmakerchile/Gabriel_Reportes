@@ -766,11 +766,11 @@ class SyncService:
                 obuma_id=self._safe_str(item.get("item_id", item.get("id"))),
                 venta_id_obuma=self._safe_str(item.get("rel_venta_id", item.get("venta_id"))),
                 producto_nombre=self._safe_str(item.get("item_nombre", item.get("producto_nombre", item.get("nombre")))),
-                producto_sku=self._safe_str(item.get("item_sku", item.get("producto_sku", item.get("sku")))),
+                producto_sku=self._safe_str(item.get("codigo_comercial", item.get("item_sku", item.get("producto_sku", item.get("sku"))))),
                 cantidad=self._safe_float(item.get("item_cantidad", item.get("cantidad", 0))),
                 precio_unitario=self._safe_float(item.get("item_precio", item.get("precio_unitario", 0))),
                 descuento=self._safe_float(item.get("item_descuento", item.get("descuento", 0))),
-                total=self._safe_float(item.get("item_total", item.get("total", 0))),
+                total=self._safe_float(item.get("subtotal", item.get("item_total", item.get("total", 0)))),
                 data_json=self._to_json(item),
             )
             self.db.add(vi)

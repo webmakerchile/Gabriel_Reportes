@@ -8,7 +8,7 @@ Plataforma de Business Intelligence para Gabriel Hoyos, quien gestiona multiples
 - **Frontend**: Streamlit (puerto 5000, directo sin nginx) - Dashboard interactivo de control
 - **Database**: PostgreSQL - Single Source of Truth con tablas historicas y datos completos de Obuma
 - **ETL**: Modulo Python para consumir API de Obuma (23 endpoints sincronizados automaticamente)
-- **Scheduler**: APScheduler - Generacion automatica de reportes Excel a las 23:50 hora Chile
+- **Scheduler**: APScheduler - Sync diario (clientes, ventas, ventas_items, cobros, empleados, productos) + reportes a las 23:50 hora Chile
 - **Reports**: openpyxl - Generacion de reportes Excel profesionales
 - **API Catalog**: Registro completo de 30 endpoints de Obuma en base de datos para automatizaciones
 
@@ -149,7 +149,9 @@ reports/                    # Directorio de reportes generados
 - Metas mensuales por vendedor (Repuestos y Maquinaria)
 - Cartera de clientes asignada por vendedor (auto-detectada desde ventas)
 - Dashboard filtra por defecto solo estos 5 vendedores
-- NOTA: Actualmente todas las ventas se clasifican como Repuestos (pendiente clasificar Rep vs Maq por categoria producto)
+- Clasificación Maquinaria vs Repuestos: Items con SKU que empieza con "MQ-" (case insensitive) son Maquinaria, el resto Repuestos
+- SKU se extrae del campo `codigo_comercial` en data_json de VentaItem (backfill automático al startup)
+- VentaItem.total se backfill desde data_json.subtotal (el campo original no lo mapeaba correctamente)
 
 ## Dashboard Sections (14 pages)
 - **Dashboard**: Centro de Mando con filtros globales (fecha, vendedor), 8 KPIs, 8 graficos, tablas top clientes/transacciones (filtrado por 5 vendedores por defecto)

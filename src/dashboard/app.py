@@ -788,7 +788,7 @@ elif page == "Vendedores":
                 meta_maq = meta.meta_maquinaria if meta else 0
                 meta_total = meta_rep + meta_maq
 
-                actual_rep_result = db.query(func.sum(
+                actual_total_neto = db.query(func.sum(
                     sql_case(
                         (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
                         else_=VentaHistorico.subtotal
@@ -801,8 +801,24 @@ elif page == "Vendedores":
                     VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                 ).scalar() or 0
 
-                actual_maq = 0
-                actual_total = actual_rep_result + actual_maq
+                actual_maq = db.query(func.coalesce(func.sum(
+                    sql_case(
+                        (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaItem.total),
+                        else_=VentaItem.total
+                    )
+                ), 0)).join(
+                    VentaHistorico, VentaHistorico.obuma_id == VentaItem.venta_id_obuma
+                ).filter(
+                    VentaHistorico.vendedor_id == vid,
+                    extract('year', VentaHistorico.fecha) == rend_anio,
+                    extract('month', VentaHistorico.fecha) == rend_mes,
+                    VentaHistorico.anulada == False,
+                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+                    func.lower(VentaItem.producto_sku).like('mq-%')
+                ).scalar() or 0
+
+                actual_rep_result = actual_total_neto - actual_maq
+                actual_total = actual_total_neto
 
                 total_cartera_count = db.query(func.count(VendedorCartera.id)).filter(
                     VendedorCartera.empleado_obuma_id == vid,

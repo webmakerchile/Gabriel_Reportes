@@ -59,6 +59,43 @@ def _seed_vendedor_metas(db):
     logger.info("Vendedor metas seeded/verified")
 
 
+def _backfill_venta_items(db):
+    from sqlalchemy import text
+    try:
+        needs_sku = db.execute(text(
+            "SELECT COUNT(*) FROM ventas_items WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL"
+        )).scalar()
+        needs_total = db.execute(text(
+            "SELECT COUNT(*) FROM ventas_items WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL"
+        )).scalar()
+
+        if needs_sku > 0:
+            db.execute(text("""
+                UPDATE ventas_items 
+                SET producto_sku = data_json::json->>'codigo_comercial'
+                WHERE (producto_sku IS NULL OR producto_sku = '')
+                AND data_json IS NOT NULL 
+                AND data_json::json->>'codigo_comercial' IS NOT NULL
+            """))
+            db.commit()
+            logger.info(f"Backfilled producto_sku for {needs_sku} items")
+
+        if needs_total > 0:
+            db.execute(text("""
+                UPDATE ventas_items 
+                SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
+                WHERE (total = 0 OR total IS NULL)
+                AND data_json IS NOT NULL
+            """))
+            db.commit()
+            logger.info(f"Backfilled total for {needs_total} items")
+
+        if needs_sku == 0 and needs_total == 0:
+            logger.info("VentaItem backfill: no updates needed")
+    except Exception as e:
+        logger.error(f"Error in VentaItem backfill: {e}")
+
+
 def _heavy_init():
     try:
         Base.metadata.create_all(bind=engine)
@@ -75,6 +112,7 @@ def _heavy_init():
         try:
             seed_api_catalog(db)
             _seed_vendedor_metas(db)
+            _backfill_venta_items(db)
         finally:
             db.close()
         start_scheduler()
