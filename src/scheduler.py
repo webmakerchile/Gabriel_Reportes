@@ -179,9 +179,9 @@ def start_scheduler():
     scheduler = BackgroundScheduler(timezone="America/Santiago")
     scheduler.add_job(
         scheduled_sync_and_report,
-        CronTrigger(hour=23, minute=50, timezone="America/Santiago"),
+        CronTrigger(hour=18, minute=30, timezone="America/Santiago"),
         id="daily_sync_report",
-        name="Sincronización y Reporte Diario 23:50 Chile",
+        name="Sincronización y Reporte Diario 18:30 Chile",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -192,5 +192,5 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("Scheduler iniciado - Reporte diario 23:50 + Verificacion programados cada 15 min")
+    logger.info("Scheduler iniciado - Sync diario 18:30 + Verificacion programados cada 15 min")
     return scheduler
