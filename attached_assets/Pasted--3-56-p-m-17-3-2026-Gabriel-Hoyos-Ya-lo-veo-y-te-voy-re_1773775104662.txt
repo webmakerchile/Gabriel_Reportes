@@ -1,0 +1,12 @@
+[3:56 p. m., 17/3/2026] Gabriel Hoyos: Ya lo veo y te voy respondiendo
+[4:04 p. m., 17/3/2026] Gabriel Hoyos: 1. Separación real de Maquinaria vs Repuestos
+Antes, todo se mostraba como Repuestos y la Maquinaria aparecía en $0. Ahora el sistema identifica automáticamente cuáles productos son maquinaria (los que tienen código que empieza con "MQ-") y los separa del resto. Así puedes ver exactamente cuánto vendió cada vendedor en repuestos y cuánto en maquinaria, y compararlo contra sus metas por categoría. Correcto
+[4:07 p. m., 17/3/2026] Gabriel Hoyos: 2. Cartera de clientes completa y automática
+Ya no es necesario asignar clientes manualmente. El sistema toma directamente desde Obuma qué clientes le pertenecen a cada vendedor, y se actualiza solo cada noche. El reporte Excel también muestra todos los clientes de la cartera, incluyendo los que no compraron ese período, con la última fecha de compra y los días que llevan sin comprar. Lo que se agregan automaticamente, ya se esta realizando, lo que quedaba pendiente es que se reasignara si se le cambiaba de vendedor recuerda que al momento de evaluar la cobertura tiene que hacerce por mes, lo de mas que me comentas abria que verlo.
+[4:07 p. m., 17/3/2026] Gabriel Hoyos: 3. Metas cargadas para todos los vendedores
+Antes solo Gabriel tenía las metas visibles. Ahora los 5 vendedores muestran sus metas de Repuestos y Maquinaria correctamente desde la primera vez que entra al sistema. Correcto
+[4:09 p. m., 17/3/2026] Gabriel Hoyos: Separación real de Maquinaria vs Repuestos
+Antes, todo se mostraba como Repuestos y la Maquinaria aparecía en $0. Ahora el sistema identifica automáticamente cuáles productos son maquinaria (los que tienen código que empieza con "MQ-") y los separa del resto. Así puedes ver exactamente cuánto vendió cada vendedor en repuestos y cuánto en maquinaria, y compararlo contra sus metas por categoría. Correcto
+lo que te salga (-) Que se marque en amarillo y se cuente comoque no se le ha vendido
+[4:11 p. m., 17/3/2026] Gabriel Hoyos: 4. Datos siempre actualizados
+El sistema sincroniza automáticamente cada noche a las 23:50 no solo las ventas, sino también el detalle de cada producto vendido. Esto garantiza que la clasificación de maquinaria y el reporte de cobertura de clientes siempre reflejen el estado real del día anterior. Correcto

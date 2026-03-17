@@ -820,6 +820,12 @@ elif page == "Vendedores":
                 actual_rep_result = actual_total_neto - actual_maq
                 actual_total = actual_total_neto
 
+                rep_negativo = actual_rep_result < 0
+                maq_negativo = actual_maq < 0
+                actual_rep_for_pct = max(actual_rep_result, 0)
+                actual_maq_for_pct = max(actual_maq, 0)
+                actual_total_for_pct = max(actual_total, 0)
+
                 total_cartera_count = db.query(func.count(VendedorCartera.id)).filter(
                     VendedorCartera.empleado_obuma_id == vid,
                     VendedorCartera.activo == True
@@ -836,16 +842,16 @@ elif page == "Vendedores":
 
                 summary_meta_rep += meta_rep
                 summary_meta_maq += meta_maq
-                summary_actual_rep += actual_rep_result
-                summary_actual_maq += actual_maq
+                summary_actual_rep += actual_rep_for_pct
+                summary_actual_maq += actual_maq_for_pct
 
                 chart_names.append(emp.nombre.split(" ")[0] if emp.nombre else vid)
                 chart_metas.append(meta_total)
-                chart_actuals.append(actual_total)
+                chart_actuals.append(actual_total_for_pct)
 
-                pct_rep = (actual_rep_result / meta_rep * 100) if meta_rep > 0 else 0
-                pct_maq = (actual_maq / meta_maq * 100) if meta_maq > 0 else 0
-                pct_total = (actual_total / meta_total * 100) if meta_total > 0 else 0
+                pct_rep = (actual_rep_for_pct / meta_rep * 100) if meta_rep > 0 else 0
+                pct_maq = (actual_maq_for_pct / meta_maq * 100) if meta_maq > 0 else 0
+                pct_total = (actual_total_for_pct / meta_total * 100) if meta_total > 0 else 0
 
                 if pct_total >= 100:
                     border_color = ACCENT_GREEN
@@ -853,6 +859,9 @@ elif page == "Vendedores":
                     border_color = ACCENT_AMBER
                 else:
                     border_color = ACCENT_RED
+
+                rep_display = f'<span style="color:#F59E0B;font-weight:600;">{format_clp(actual_rep_result)} ⚠</span>' if rep_negativo else format_clp(actual_rep_result)
+                maq_display = f'<span style="color:#F59E0B;font-weight:600;">{format_clp(actual_maq)} ⚠</span>' if maq_negativo else format_clp(actual_maq)
 
                 st.markdown(f"""
                 <div style="background:{CARD_BG}; border:1px solid {border_color}; border-radius:12px;
@@ -869,15 +878,15 @@ elif page == "Vendedores":
 
                 vc1, vc2, vc3, vc4 = st.columns(4)
                 with vc1:
-                    st.caption(f"Repuestos: {format_clp(actual_rep_result)} / {format_clp(meta_rep)}")
+                    st.markdown(f"<small>Repuestos: {rep_display} / {format_clp(meta_rep)}</small>", unsafe_allow_html=True)
                     prog_rep = min(pct_rep / 100, 1.0)
                     st.progress(prog_rep if prog_rep >= 0 else 0)
                 with vc2:
-                    st.caption(f"Maquinaria: {format_clp(actual_maq)} / {format_clp(meta_maq)}")
+                    st.markdown(f"<small>Maquinaria: {maq_display} / {format_clp(meta_maq)}</small>", unsafe_allow_html=True)
                     prog_maq = min(pct_maq / 100, 1.0)
                     st.progress(prog_maq if prog_maq >= 0 else 0)
                 with vc3:
-                    st.caption(f"Total: {format_clp(actual_total)} / {format_clp(meta_total)}")
+                    st.caption(f"Total: {format_clp(actual_total_for_pct)} / {format_clp(meta_total)}")
                     prog_total = min(pct_total / 100, 1.0)
                     st.progress(prog_total if prog_total >= 0 else 0)
                 with vc4:
