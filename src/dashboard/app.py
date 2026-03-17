@@ -1313,6 +1313,7 @@ elif page == "Vendedores":
 
             if meta_sel_vid:
                 st.markdown("---")
+                st.info("💡 Haz clic en cualquier celda de la tabla para editar el valor. Luego presiona **💾 Guardar Metas**.")
 
                 existing_metas = db.query(VendedorMeta).filter(
                     VendedorMeta.empleado_obuma_id == meta_sel_vid,
@@ -1337,7 +1338,13 @@ elif page == "Vendedores":
                     hide_index=True,
                     disabled=["Mes"],
                     num_rows="fixed",
-                    key="meta_editor"
+                    use_container_width=True,
+                    column_config={
+                        "Mes": st.column_config.TextColumn("Mes", disabled=True),
+                        "Meta Repuestos": st.column_config.NumberColumn("Meta Repuestos ($)", min_value=0, step=100000, format="$ %d"),
+                        "Meta Maquinaria": st.column_config.NumberColumn("Meta Maquinaria ($)", min_value=0, step=100000, format="$ %d"),
+                    },
+                    key=f"meta_editor_{meta_sel_vid}_{meta_anio}"
                 )
 
                 btn_c1, btn_c2 = st.columns(2)
