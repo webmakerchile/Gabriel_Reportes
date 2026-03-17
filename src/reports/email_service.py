@@ -12,21 +12,70 @@ logger = logging.getLogger(__name__)
 
 
 def send_report_email(to_emails: list, subject: str, body_html: str, attachment_paths: list = None) -> dict:
+    resend_key = os.environ.get("RESEND_API_KEY")
     sendgrid_key = os.environ.get("SENDGRID_API_KEY")
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_user = os.environ.get("SMTP_USER")
     smtp_pass = os.environ.get("SMTP_PASS")
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    from_email = os.environ.get("EMAIL_FROM", "reportes@vlsur.cl")
+    from_email = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
     from_name = os.environ.get("EMAIL_FROM_NAME", "BI Platform - VLSur")
 
-    if sendgrid_key:
+    if resend_key:
+        return _send_via_resend(resend_key, from_email, from_name, to_emails, subject, body_html, attachment_paths)
+    elif sendgrid_key:
         return _send_via_sendgrid(sendgrid_key, from_email, from_name, to_emails, subject, body_html, attachment_paths)
     elif smtp_host and smtp_user and smtp_pass:
         return _send_via_smtp(smtp_host, smtp_port, smtp_user, smtp_pass, from_email, from_name, to_emails, subject, body_html, attachment_paths)
     else:
-        logger.warning("No email service configured (need SENDGRID_API_KEY or SMTP_HOST/USER/PASS)")
-        return {"success": False, "error": "No email service configured. Configure SENDGRID_API_KEY or SMTP settings."}
+        logger.warning("No email service configured")
+        return {"success": False, "error": "No email service configured."}
+
+
+def _send_via_resend(api_key, from_email, from_name, to_emails, subject, body_html, attachment_paths):
+    try:
+        import httpx
+
+        attachments_data = []
+        if attachment_paths:
+            for fpath in attachment_paths:
+                if os.path.exists(fpath):
+                    with open(fpath, "rb") as f:
+                        file_data = base64.b64encode(f.read()).decode()
+                    attachments_data.append({
+                        "filename": os.path.basename(fpath),
+                        "content": file_data,
+                    })
+
+        payload = {
+            "from": f"{from_name} <{from_email}>",
+            "to": to_emails,
+            "subject": subject,
+            "html": body_html,
+        }
+        if attachments_data:
+            payload["attachments"] = attachments_data
+
+        resp = httpx.post(
+            "https://api.resend.com/emails",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            timeout=30
+        )
+
+        if resp.status_code in (200, 201, 202):
+            logger.info(f"Email sent via Resend to {to_emails}")
+            return {"success": True, "method": "resend", "recipients": to_emails}
+        else:
+            logger.error(f"Resend error {resp.status_code}: {resp.text}")
+            return {"success": False, "error": f"Resend error: {resp.status_code} - {resp.text}"}
+
+    except Exception as e:
+        logger.error(f"Resend exception: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def _send_via_sendgrid(api_key, from_email, from_name, to_emails, subject, body_html, attachment_paths):
@@ -46,10 +95,8 @@ def _send_via_sendgrid(api_key, from_email, from_name, to_emails, subject, body_
                         "disposition": "attachment"
                     })
 
-        personalizations = [{"to": [{"email": e.strip()} for e in to_emails]}]
-
         payload = {
-            "personalizations": personalizations,
+            "personalizations": [{"to": [{"email": e.strip()} for e in to_emails]}],
             "from": {"email": from_email, "name": from_name},
             "subject": subject,
             "content": [{"type": "text/html", "value": body_html}],
@@ -85,7 +132,6 @@ def _send_via_smtp(host, port, user, password, from_email, from_name, to_emails,
         msg["From"] = f"{from_name} <{from_email}>"
         msg["To"] = ", ".join(to_emails)
         msg["Subject"] = subject
-
         msg.attach(MIMEText(body_html, "html"))
 
         if attachment_paths:
@@ -139,13 +185,16 @@ def build_report_email_html(vendedor_name: str, report_type: str, date_range: st
 
 
 def check_email_config() -> dict:
+    resend_key = os.environ.get("RESEND_API_KEY")
     sendgrid_key = os.environ.get("SENDGRID_API_KEY")
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_user = os.environ.get("SMTP_USER")
 
-    if sendgrid_key:
+    if resend_key:
+        return {"configured": True, "method": "Resend", "detail": "API Key configurada"}
+    elif sendgrid_key:
         return {"configured": True, "method": "SendGrid", "detail": "API Key configurada"}
     elif smtp_host and smtp_user:
         return {"configured": True, "method": "SMTP", "detail": f"Servidor: {smtp_host}"}
     else:
-        return {"configured": False, "method": None, "detail": "Sin configurar. Agregue SENDGRID_API_KEY o SMTP_HOST/SMTP_USER/SMTP_PASS en las variables de entorno."}
+        return {"configured": False, "method": None, "detail": "Sin configurar."}
