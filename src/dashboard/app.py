@@ -42,6 +42,48 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ── LOGIN ──────────────────────────────────────────────────────────────────
+_VALID_USER = os.environ.get("DASHBOARD_USER", "gabriel")
+_VALID_PASS = os.environ.get("DASHBOARD_PASSWORD", "vlsur2026")
+
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.markdown("""
+    <style>
+    div[data-testid="stSidebar"] {display: none;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    col_l, col_c, col_r = st.columns([1, 1.2, 1])
+    with col_c:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("""
+        <div style="background:#1a1f2e;border:1px solid #2d3548;border-radius:16px;padding:40px 36px;text-align:center;">
+            <h1 style="color:#e2e8f0;font-size:1.6rem;margin-bottom:4px;">📊 BI Platform</h1>
+            <p style="color:#94a3b8;font-size:0.9rem;margin-bottom:24px;">VLSur - Acceso Privado</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("login_form"):
+            user_input = st.text_input("Usuario", placeholder="usuario")
+            pass_input = st.text_input("Contraseña", type="password", placeholder="••••••••")
+            submitted = st.form_submit_button("Ingresar", use_container_width=True, type="primary")
+
+        if submitted:
+            if user_input.strip() == _VALID_USER and pass_input == _VALID_PASS:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos.")
+
+    st.stop()
+# ── FIN LOGIN ──────────────────────────────────────────────────────────────
+
 DARK_BG = "#0e1117"
 CARD_BG = "#1a1f2e"
 CARD_BORDER = "#2d3548"
@@ -306,6 +348,9 @@ page = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.caption("v2.0 | Powered by Obuma ERP")
+if st.sidebar.button("🔒 Cerrar Sesión", use_container_width=True):
+    st.session_state.authenticated = False
+    st.rerun()
 
 
 # ============================================================
