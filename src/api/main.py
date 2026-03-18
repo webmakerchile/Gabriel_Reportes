@@ -96,6 +96,54 @@ def _backfill_venta_items(db):
         logger.error(f"Error in VentaItem backfill: {e}")
 
 
+def _seed_reportes_programados(db):
+    from src.models.models import ReporteProgramado
+    from datetime import datetime, timedelta
+
+    REPORTES_CONFIG = [
+        {"nombre": "Reporte Semanal - Ernesto Quintiliani", "vendedor_obuma_id": "28887", "email_principal": "ventas.ernesto.q@gmail.com"},
+        {"nombre": "Reporte Semanal - Jhonatan Ruiz",       "vendedor_obuma_id": "28886", "email_principal": "ventas.jhonatan.ruiz@gmail.com"},
+        {"nombre": "Reporte Semanal - Pablo Pinto",         "vendedor_obuma_id": "28891", "email_principal": "vicentepinto@vlsur.cl"},
+        {"nombre": "Reporte Semanal - Jesus Gonzalez",      "vendedor_obuma_id": "28892", "email_principal": "jesusgonzalez@vlsur.cl"},
+    ]
+    GABRIEL_EMAIL = "gabrielhoyos@vlsur.cl"
+
+    now = datetime.now()
+    days_until_friday = (4 - now.weekday()) % 7
+    if days_until_friday == 0 and now.hour >= 18:
+        days_until_friday = 7
+    next_friday = (now + timedelta(days=max(days_until_friday, 1))).replace(hour=18, minute=30, second=0, microsecond=0)
+
+    for cfg in REPORTES_CONFIG:
+        existing = db.query(ReporteProgramado).filter(
+            ReporteProgramado.vendedor_obuma_id == cfg["vendedor_obuma_id"],
+            ReporteProgramado.frecuencia == "semanal",
+            ReporteProgramado.tenant_id == 1
+        ).first()
+        emails = f"{cfg['email_principal']},\n{GABRIEL_EMAIL}"
+        if not existing:
+            db.add(ReporteProgramado(
+                tenant_id=1,
+                nombre=cfg["nombre"],
+                tipo_reporte="individual",
+                vendedor_obuma_id=cfg["vendedor_obuma_id"],
+                frecuencia="semanal",
+                dia_semana=4,
+                hora=18,
+                minuto=30,
+                emails_destino=emails,
+                filtro_fecha_tipo="mes_actual",
+                activo=True,
+                total_enviados=0,
+                proxima_ejecucion=next_friday,
+            ))
+        else:
+            if GABRIEL_EMAIL not in (existing.emails_destino or ""):
+                existing.emails_destino = emails
+    db.commit()
+    logger.info("Reportes programados seeded/verified (4 semanales viernes 18:30)")
+
+
 def _heavy_init():
     try:
         Base.metadata.create_all(bind=engine)
@@ -113,6 +161,7 @@ def _heavy_init():
             seed_api_catalog(db)
             _seed_vendedor_metas(db)
             _backfill_venta_items(db)
+            _seed_reportes_programados(db)
         finally:
             db.close()
         start_scheduler()
