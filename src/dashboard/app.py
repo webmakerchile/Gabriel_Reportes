@@ -908,30 +908,51 @@ elif page == "Vendedores":
                 rep_display = f'<span style="color:#F59E0B;font-weight:600;">{format_clp(actual_rep_result)} ⚠</span>' if rep_negativo else format_clp(actual_rep_result)
                 maq_display = f'<span style="color:#F59E0B;font-weight:600;">{format_clp(actual_maq)} ⚠</span>' if maq_negativo else format_clp(actual_maq)
 
+                pct_rep_color = ACCENT_GREEN if pct_rep >= 100 else (ACCENT_AMBER if pct_rep >= 70 else ACCENT_RED)
+                pct_maq_color = ACCENT_GREEN if pct_maq >= 100 else (ACCENT_AMBER if pct_maq >= 70 else ACCENT_RED)
+
                 st.markdown(f"""
                 <div style="background:{CARD_BG}; border:1px solid {border_color}; border-radius:12px;
-                            padding:1rem 1.5rem; margin-bottom:0.8rem; border-left:4px solid {border_color};">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                            padding:1rem 1.5rem; margin-bottom:0.4rem; border-left:4px solid {border_color};">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
                         <div>
                             <span style="font-size:1.1rem; font-weight:600; color:{TEXT_PRIMARY};">{emp.nombre}</span>
                             <span style="font-size:0.8rem; color:{TEXT_SECONDARY}; margin-left:0.5rem;">{emp.cargo or ''}</span>
                         </div>
-                        <span style="font-size:1.3rem; font-weight:700; color:{border_color};">{pct_total:.0f}%</span>
+                        <div style="display:flex; gap:1.2rem; align-items:center;">
+                            <div style="text-align:center;">
+                                <div style="font-size:0.72rem; color:{TEXT_SECONDARY}; margin-bottom:2px;">🔧 Repuestos</div>
+                                <div style="font-size:1.25rem; font-weight:700; color:{pct_rep_color};">{pct_rep:.0f}%</div>
+                                <div style="font-size:0.7rem; color:{TEXT_SECONDARY};">{rep_display} / {format_clp(meta_rep)}</div>
+                            </div>
+                            <div style="width:1px; height:40px; background:{CARD_BORDER};"></div>
+                            <div style="text-align:center;">
+                                <div style="font-size:0.72rem; color:{TEXT_SECONDARY}; margin-bottom:2px;">🏗️ Maquinaria</div>
+                                <div style="font-size:1.25rem; font-weight:700; color:{pct_maq_color};">{pct_maq:.0f}%</div>
+                                <div style="font-size:0.7rem; color:{TEXT_SECONDARY};">{maq_display} / {format_clp(meta_maq)}</div>
+                            </div>
+                            <div style="width:1px; height:40px; background:{CARD_BORDER};"></div>
+                            <div style="text-align:center;">
+                                <div style="font-size:0.72rem; color:{TEXT_SECONDARY}; margin-bottom:2px;">📊 Total</div>
+                                <div style="font-size:1.25rem; font-weight:700; color:{border_color};">{pct_total:.0f}%</div>
+                                <div style="font-size:0.7rem; color:{TEXT_SECONDARY};">{format_clp(actual_total_for_pct)} / {format_clp(meta_total)}</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
 
                 vc1, vc2, vc3, vc4 = st.columns(4)
                 with vc1:
-                    st.markdown(f"<small>Repuestos: {rep_display} / {format_clp(meta_rep)}</small>", unsafe_allow_html=True)
+                    st.caption("Avance Repuestos")
                     prog_rep = min(pct_rep / 100, 1.0)
                     st.progress(prog_rep if prog_rep >= 0 else 0)
                 with vc2:
-                    st.markdown(f"<small>Maquinaria: {maq_display} / {format_clp(meta_maq)}</small>", unsafe_allow_html=True)
+                    st.caption("Avance Maquinaria")
                     prog_maq = min(pct_maq / 100, 1.0)
                     st.progress(prog_maq if prog_maq >= 0 else 0)
                 with vc3:
-                    st.caption(f"Total: {format_clp(actual_total_for_pct)} / {format_clp(meta_total)}")
+                    st.caption("Avance Total")
                     prog_total = min(pct_total / 100, 1.0)
                     st.progress(prog_total if prog_total >= 0 else 0)
                 with vc4:

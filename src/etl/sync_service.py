@@ -249,6 +249,16 @@ class SyncService:
 
             rel_usuario_id = str(data.get('rel_usuario_id', '0') or '0')
             if rel_usuario_id == '0' or rel_usuario_id not in TRACKED_VENDEDORES:
+                # Cliente sin vendedor tracked: desactivar cualquier cartera activa
+                orphan_assignments = self.db.query(VendedorCartera).filter(
+                    VendedorCartera.tenant_id == self.tenant_id,
+                    VendedorCartera.cliente_id == cli.id,
+                    VendedorCartera.activo == True
+                ).all()
+                for old in orphan_assignments:
+                    old.activo = False
+                    old.fecha_baja = datetime.now().date()
+                    deactivated += 1
                 continue
 
             old_assignments = self.db.query(VendedorCartera).filter(
