@@ -1206,7 +1206,7 @@ elif page == "Vendedores":
                                 "Cliente": cli.nombre,
                                 "RUT": cli.rut or "—",
                                 "Última Compra": str(ultima_compra.date()) if ultima_compra else "Sin registro",
-                                "Días sin Comprar": dias_sin if dias_sin is not None else "—"
+                                "Días sin Comprar": str(dias_sin) if dias_sin is not None else "—"
                             })
 
                     total_cartera = len(cartera_cruce)
