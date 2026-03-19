@@ -1668,6 +1668,10 @@ elif page == "Clientes":
             with fc2:
                 show_inactive = st.checkbox("Mostrar inactivos", value=False, key="cli_inactive")
 
+            total_activos = db.query(func.count(ClienteFinal.id)).filter(ClienteFinal.activo == True).scalar() or 0
+            total_inactivos = db.query(func.count(ClienteFinal.id)).filter(ClienteFinal.activo == False).scalar() or 0
+            total_db = total_activos + total_inactivos
+
             clientes_q = db.query(ClienteFinal)
             if not show_inactive:
                 clientes_q = clientes_q.filter(ClienteFinal.activo == True)
@@ -1679,7 +1683,13 @@ elif page == "Clientes":
             clientes = clientes_q.order_by(ClienteFinal.nombre).all()
 
             if clientes:
-                render_metric("Clientes Encontrados", str(len(clientes)), "👥", ACCENT_BLUE)
+                m1, m2, m3 = st.columns(3)
+                with m1:
+                    render_metric("Total en DB", f"{total_db:,}", "🗄️", ACCENT_BLUE)
+                with m2:
+                    render_metric("Activos", f"{total_activos:,}", "✅", "#27AE60")
+                with m3:
+                    render_metric("Inactivos", f"{total_inactivos:,}", "⛔", "#E74C3C")
                 st.markdown("")
 
                 col_cc1, col_cc2 = st.columns(2)

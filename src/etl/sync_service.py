@@ -144,11 +144,14 @@ class SyncService:
             return data
 
         items = self._extract_items(data, "clientes")
+        # Track obuma_ids returned by API to mark missing ones as inactive
+        api_obuma_ids = set()
         count = 0
         for item in items:
             obuma_id = self._safe_str(item.get("cliente_id", item.get("id", "")))
             if not obuma_id:
                 continue
+            api_obuma_ids.add(obuma_id)
 
             rut_raw = (item.get("cliente_rut", "") or "").strip()
             nombre = item.get("cliente_razon_social", item.get("cliente_nombre_fantasia", ""))
@@ -165,6 +168,10 @@ class SyncService:
                 ClienteFinal.obuma_id == obuma_id,
                 ClienteFinal.tenant_id == self.tenant_id
             ).first()
+
+            # Determine activo from Obuma field (1=active, 0=inactive)
+            cliente_activo_raw = item.get("cliente_activo", 1)
+            is_activo = bool(int(cliente_activo_raw or 1))
 
             if existing:
                 if is_valid_rut:
@@ -185,6 +192,7 @@ class SyncService:
                 existing.ciudad = ciudad or existing.ciudad
                 existing.obuma_id = obuma_id
                 existing.rut = unique_rut
+                existing.activo = is_activo
                 existing.data_json = self._to_json(item)
             else:
                 unique_rut = f"OBU-{obuma_id}"
@@ -206,6 +214,7 @@ class SyncService:
                     comuna=comuna,
                     ciudad=ciudad,
                     obuma_id=obuma_id,
+                    activo=is_activo,
                     data_json=self._to_json(item),
                 )
                 self.db.add(cliente)
