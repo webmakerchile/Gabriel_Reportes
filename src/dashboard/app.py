@@ -292,6 +292,159 @@ def run_async(coro):
         loop.close()
 
 
+def _run_full_sync_ui():
+    """Pantalla de actualización completa con barra de progreso por módulo."""
+    SYNC_STEPS = [
+        ("clientes",         "👥 Clientes y Cartera de Vendedores"),
+        ("ventas",           "💰 Ventas y Documentos Tributarios"),
+        ("ventas_items_inc", "📦 Items de Ventas (últimos 45 días)"),
+        ("ventas_cobros",    "💳 Cobros Recibidos"),
+        ("productos",        "🔧 Productos y Catálogo"),
+        ("compras",          "🛒 Compras y Órdenes"),
+        ("contabilidad",     "📊 Contabilidad y Libro Diario"),
+        ("empleados",        "👤 Empleados y Remuneraciones"),
+    ]
+    total = len(SYNC_STEPS)
+
+    st.markdown(f"""
+    <div style="text-align:center;padding:24px 0 8px;">
+        <span style="font-size:2.5rem;">🔄</span>
+        <h1 style="color:{TEXT_PRIMARY};font-size:1.8rem;margin:8px 0 4px;">Actualizando Sistema</h1>
+        <p style="color:{TEXT_SECONDARY};">Sincronizando todos los módulos desde Obuma ERP...</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    progress_bar = st.progress(0, text="Iniciando sincronización...")
+    status_card = st.empty()
+    results_area = st.empty()
+
+    db = get_db()
+    service = SyncService(db)
+    results = []
+
+    try:
+        for i, (step_key, step_label) in enumerate(SYNC_STEPS):
+            pct = int(i / total * 100)
+            progress_bar.progress(i / total, text=f"Paso {i+1}/{total}: {step_label}")
+            status_card.markdown(f"""
+            <div style="background:{CARD_BG};border:1px solid {ACCENT_BLUE};border-radius:12px;
+                        padding:18px 24px;margin:12px 0;display:flex;align-items:center;gap:16px;">
+                <span style="font-size:1.8rem;">⏳</span>
+                <div>
+                    <p style="color:{ACCENT_BLUE};font-weight:700;font-size:1.05rem;margin:0;">{step_label}</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
+                        Consultando API de Obuma... ({pct}% completado)
+                    </p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            try:
+                if step_key == "ventas_items_inc":
+                    fecha_desde = (date.today() - timedelta(days=45)).strftime("%Y-%m-%d")
+                    fecha_hasta = date.today().strftime("%Y-%m-%d")
+                    result = run_async(service.sync_ventas_items_incremental(fecha_desde, fecha_hasta))
+                    from sqlalchemy import text as _sa_text
+                    _db2 = get_db()
+                    try:
+                        _db2.execute(_sa_text("""
+                            UPDATE ventas_items SET producto_sku = data_json::json->>'codigo_comercial'
+                            WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL
+                              AND data_json::json->>'codigo_comercial' IS NOT NULL
+                        """))
+                        _db2.execute(_sa_text("""
+                            UPDATE ventas_items SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
+                            WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL
+                        """))
+                        _db2.commit()
+                    finally:
+                        _db2.close()
+                elif step_key == "clientes":
+                    result = run_async(service.sync_clientes())
+                elif step_key == "ventas":
+                    result = run_async(service.sync_ventas())
+                elif step_key == "ventas_cobros":
+                    result = run_async(service.sync_ventas_cobros())
+                elif step_key == "productos":
+                    result = run_async(service.sync_productos())
+                elif step_key == "compras":
+                    result = run_async(service.sync_compras())
+                elif step_key == "contabilidad":
+                    result = run_async(service.sync_contabilidad())
+                elif step_key == "empleados":
+                    result = run_async(service.sync_empleados())
+                else:
+                    result = {}
+
+                synced = result.get("synced", 0) if isinstance(result, dict) else 0
+                results.append({"label": step_label, "ok": True, "synced": synced})
+            except Exception as e:
+                results.append({"label": step_label, "ok": False, "error": str(e)[:120]})
+
+    finally:
+        db.close()
+
+    progress_bar.progress(1.0, text="✅ ¡Sincronización completada!")
+    status_card.markdown(f"""
+    <div style="background:{CARD_BG};border:2px solid {ACCENT_GREEN};border-radius:12px;
+                padding:20px 24px;margin:12px 0;text-align:center;">
+        <span style="font-size:2rem;">✅</span>
+        <p style="color:{ACCENT_GREEN};font-weight:700;font-size:1.2rem;margin:8px 0 0;">
+            ¡Todos los módulos actualizados!
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    ok_count = sum(1 for r in results if r["ok"])
+    err_count = len(results) - ok_count
+    total_synced = sum(r.get("synced", 0) for r in results if r["ok"])
+
+    rows_html = ""
+    for r in results:
+        if r["ok"]:
+            rows_html += f"""
+            <tr>
+                <td style="padding:8px 12px;color:{TEXT_PRIMARY};">{r['label']}</td>
+                <td style="padding:8px 12px;color:{ACCENT_GREEN};font-weight:600;">✅ OK</td>
+                <td style="padding:8px 12px;color:{TEXT_SECONDARY};text-align:right;">
+                    {r.get('synced', 0):,} registros
+                </td>
+            </tr>"""
+        else:
+            rows_html += f"""
+            <tr>
+                <td style="padding:8px 12px;color:{TEXT_PRIMARY};">{r['label']}</td>
+                <td style="padding:8px 12px;color:{ACCENT_RED};font-weight:600;">❌ Error</td>
+                <td style="padding:8px 12px;color:{ACCENT_RED};font-size:0.82rem;">{r.get('error','')}</td>
+            </tr>"""
+
+    results_area.markdown(f"""
+    <div style="background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:12px;
+                padding:20px 24px;margin:16px 0;">
+        <p style="color:{TEXT_PRIMARY};font-weight:700;font-size:1rem;margin:0 0 12px;">
+            📊 Resumen: {ok_count}/{len(results)} módulos OK · {total_synced:,} registros totales
+            {"· ⚠️ " + str(err_count) + " error(es)" if err_count else ""}
+        </p>
+        <table style="width:100%;border-collapse:collapse;">
+            <thead>
+                <tr style="border-bottom:1px solid {CARD_BORDER};">
+                    <th style="padding:6px 12px;color:{TEXT_SECONDARY};text-align:left;">Módulo</th>
+                    <th style="padding:6px 12px;color:{TEXT_SECONDARY};text-align:left;">Estado</th>
+                    <th style="padding:6px 12px;color:{TEXT_SECONDARY};text-align:right;">Registros</th>
+                </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("📊 Ver Dashboard Actualizado", type="primary", use_container_width=True, key="btn_goto_dashboard"):
+        st.session_state.syncing_now = False
+        st.session_state.sync_done = True
+        st.rerun()
+
+
 def format_clp(value):
     if value is None:
         return "$0"
@@ -337,6 +490,33 @@ st.sidebar.markdown("**Gabriel Hoyos**")
 st.sidebar.caption("Centro de Mando Empresarial")
 st.sidebar.markdown("---")
 
+st.sidebar.markdown("""
+<style>
+div[data-testid="stSidebar"] button[kind="primary"] {
+    background: linear-gradient(135deg, #10b981, #059669) !important;
+    color: white !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 10px !important;
+    letter-spacing: 0.03em !important;
+    box-shadow: 0 0 12px rgba(16,185,129,0.35) !important;
+}
+div[data-testid="stSidebar"] button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #059669, #047857) !important;
+    box-shadow: 0 0 20px rgba(16,185,129,0.55) !important;
+    transform: translateY(-1px);
+}
+</style>
+""", unsafe_allow_html=True)
+
+if st.sidebar.button("🔄 ACTUALIZAR AHORA", use_container_width=True, type="primary", key="btn_actualizar_sidebar"):
+    st.session_state.syncing_now = True
+    st.rerun()
+
+st.sidebar.markdown("---")
+
 page = st.sidebar.radio(
     "Navegacion",
     ["Dashboard", "Vendedores", "Ventas", "Clientes", "Proveedores", "Productos",
@@ -352,6 +532,13 @@ if st.sidebar.button("🔒 Cerrar Sesión", use_container_width=True):
     st.session_state.authenticated = False
     st.rerun()
 
+
+# ============================================================
+# ACTUALIZAR AHORA - Intercepta toda la navegación si está activo
+# ============================================================
+if st.session_state.get("syncing_now", False):
+    _run_full_sync_ui()
+    st.stop()
 
 # ============================================================
 # DASHBOARD
