@@ -195,9 +195,12 @@ async def sync_endpoint(endpoint: str, db: Session = Depends(get_db)):
     method_map = {
         "clientes": service.sync_clientes,
         "ventas": service.sync_ventas,
+        "ventas_items": service.sync_ventas_items,
+        "ventas_cobros": service.sync_ventas_cobros,
         "productos": service.sync_productos,
         "compras": service.sync_compras,
         "contabilidad": service.sync_contabilidad,
+        "empleados": service.sync_empleados,
     }
     if endpoint not in method_map:
         raise HTTPException(status_code=400, detail=f"Endpoint '{endpoint}' no válido")
