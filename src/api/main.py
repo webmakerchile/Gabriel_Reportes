@@ -208,6 +208,17 @@ async def sync_endpoint(endpoint: str, db: Session = Depends(get_db)):
     return {"status": "completed", "endpoint": endpoint, "result": result}
 
 
+@app.post("/api/sync/ventas_items/incremental")
+async def sync_ventas_items_incremental(
+    fecha_desde: str = Query(..., description="Fecha inicio YYYY-MM-DD"),
+    fecha_hasta: str = Query(..., description="Fecha fin YYYY-MM-DD"),
+    db: Session = Depends(get_db)
+):
+    service = SyncService(db)
+    result = await service.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
+    return {"status": "completed", "result": result}
+
+
 @app.get("/api/audit")
 def audit(db: Session = Depends(get_db)):
     service = SyncService(db)

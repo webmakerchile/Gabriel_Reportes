@@ -761,6 +761,20 @@ class SyncService:
         self._log_sync("ventas", len(items), db_count, abs(len(items) - count))
         return {"synced": count, "total_api": len(items), "total_db": db_count}
 
+    def _build_venta_item(self, item: dict) -> VentaItem:
+        return VentaItem(
+            tenant_id=self.tenant_id,
+            obuma_id=self._safe_str(item.get("vd_id", item.get("item_id", item.get("id")))),
+            venta_id_obuma=self._safe_str(item.get("rel_venta_id", item.get("venta_id"))),
+            producto_nombre=self._safe_str(item.get("producto_nombre", item.get("item_nombre", item.get("nombre")))),
+            producto_sku=self._safe_str(item.get("codigo_comercial", item.get("item_sku", item.get("producto_sku", item.get("sku"))))),
+            cantidad=self._safe_float(item.get("cantidad", item.get("item_cantidad", 0))),
+            precio_unitario=self._safe_float(item.get("item_precio", item.get("precio_unitario", 0))),
+            descuento=self._safe_float(item.get("item_descuento", item.get("descuento", 0))),
+            total=self._safe_float(item.get("subtotal", item.get("item_total", item.get("total", 0)))),
+            data_json=self._to_json(item),
+        )
+
     async def sync_ventas_items(self) -> dict:
         data = await self.client.get_ventas_items_all_pages()
         if isinstance(data, dict) and "error" in data:
@@ -771,24 +785,64 @@ class SyncService:
         self.db.query(VentaItem).filter(VentaItem.tenant_id == self.tenant_id).delete()
         count = 0
         for item in items:
-            vi = VentaItem(
-                tenant_id=self.tenant_id,
-                obuma_id=self._safe_str(item.get("item_id", item.get("id"))),
-                venta_id_obuma=self._safe_str(item.get("rel_venta_id", item.get("venta_id"))),
-                producto_nombre=self._safe_str(item.get("item_nombre", item.get("producto_nombre", item.get("nombre")))),
-                producto_sku=self._safe_str(item.get("codigo_comercial", item.get("item_sku", item.get("producto_sku", item.get("sku"))))),
-                cantidad=self._safe_float(item.get("item_cantidad", item.get("cantidad", 0))),
-                precio_unitario=self._safe_float(item.get("item_precio", item.get("precio_unitario", 0))),
-                descuento=self._safe_float(item.get("item_descuento", item.get("descuento", 0))),
-                total=self._safe_float(item.get("subtotal", item.get("item_total", item.get("total", 0)))),
-                data_json=self._to_json(item),
-            )
-            self.db.add(vi)
+            self.db.add(self._build_venta_item(item))
             count += 1
 
         self.db.commit()
         self._log_sync("ventas_items", len(items), count, 0)
         return {"synced": count, "total_api": len(items), "total_db": count}
+
+    async def sync_ventas_items_incremental(self, fecha_desde: str, fecha_hasta: str) -> dict:
+        """Sync items for a date range: delete+reinsert for ventas in range. Fast bulk operation."""
+        from sqlalchemy import text as sa_text
+        params = {"fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta}
+        data = await self.client.get_ventas_items_all_pages(params)
+        if isinstance(data, dict) and "error" in data:
+            self._log_sync("ventas_items", 0, 0, 0, estado="error", detalle=str(data.get("error")))
+            return data
+
+        items = self._extract_items(data, "items", "ventas_items")
+        if not items:
+            return {"synced": 0, "new": 0, "total_api": 0,
+                    "fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta}
+
+        # Get the venta IDs in this date range from our DB
+        ventas_in_range = [
+            row[0] for row in self.db.execute(
+                sa_text("""SELECT obuma_id FROM ventas_historico
+                           WHERE tenant_id = :tid AND fecha BETWEEN :fd AND :fh"""),
+                {"tid": self.tenant_id, "fd": fecha_desde, "fh": fecha_hasta}
+            ).fetchall()
+        ]
+
+        # Delete existing items for those ventas (clean slate for the range)
+        if ventas_in_range:
+            chunk = 1000
+            deleted = 0
+            for i in range(0, len(ventas_in_range), chunk):
+                batch_ids = ventas_in_range[i:i + chunk]
+                d = self.db.query(VentaItem).filter(
+                    VentaItem.tenant_id == self.tenant_id,
+                    VentaItem.venta_id_obuma.in_(batch_ids)
+                ).delete(synchronize_session=False)
+                deleted += d
+            self.db.commit()
+
+        # Bulk insert all incoming items in batches of 500
+        candidates = [self._build_venta_item(item) for item in items]
+        batch_size = 500
+        count = 0
+        for i in range(0, len(candidates), batch_size):
+            batch = candidates[i:i + batch_size]
+            self.db.bulk_save_objects(batch)
+            self.db.commit()
+            count += len(batch)
+
+        self._log_sync("ventas_items", len(items), count, 0,
+                       detalle=f"incremental {fecha_desde} a {fecha_hasta}: {count} items para {len(ventas_in_range)} ventas")
+        return {"synced": count, "new": count, "total_api": len(items),
+                "ventas_en_rango": len(ventas_in_range),
+                "fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta}
 
     async def sync_ventas_cotizaciones(self) -> dict:
         data = await self.client.get_ventas_cotizaciones_all_pages()

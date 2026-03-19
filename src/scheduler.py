@@ -27,8 +27,14 @@ def scheduled_sync_and_report():
         logger.info(f"Clientes sync: {results['clientes'].get('synced', '?')}")
         results["ventas"] = loop.run_until_complete(service.sync_ventas())
         logger.info(f"Ventas sync: {results['ventas'].get('synced', '?')}")
-        results["ventas_items"] = loop.run_until_complete(service.sync_ventas_items())
-        logger.info(f"Ventas items sync: {results['ventas_items'].get('synced', '?')}")
+        # Sync items incrementally (last 45 days) — much faster than full sync
+        today = date.today()
+        fecha_desde = (today - timedelta(days=45)).strftime("%Y-%m-%d")
+        fecha_hasta = today.strftime("%Y-%m-%d")
+        results["ventas_items"] = loop.run_until_complete(
+            service.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
+        )
+        logger.info(f"Ventas items sync (incremental): {results['ventas_items'].get('synced', '?')}")
         results["ventas_cobros"] = loop.run_until_complete(service.sync_ventas_cobros())
         results["empleados"] = loop.run_until_complete(service.sync_empleados())
         results["productos"] = loop.run_until_complete(service.sync_productos())
