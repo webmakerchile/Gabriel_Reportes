@@ -144,6 +144,59 @@ def _seed_reportes_programados(db):
     logger.info("Reportes programados seeded/verified (4 semanales viernes 18:30)")
 
 
+def _auto_sync_current_month_items():
+    """If the current month has no VentaItem records, run incremental sync automatically."""
+    import asyncio
+    from datetime import date
+    from sqlalchemy import text as sa_text
+    try:
+        db = SessionLocal()
+        today = date.today()
+        fecha_desde = today.replace(day=1).strftime("%Y-%m-%d")
+        fecha_hasta = today.strftime("%Y-%m-%d")
+
+        # Count items for current month via join
+        count = db.execute(sa_text("""
+            SELECT COUNT(vi.id) FROM ventas_items vi
+            JOIN ventas_historico vh ON vh.obuma_id = vi.venta_id_obuma
+            WHERE EXTRACT(year FROM vh.fecha) = :yr AND EXTRACT(month FROM vh.fecha) = :mo
+        """), {"yr": today.year, "mo": today.month}).scalar() or 0
+
+        if count == 0:
+            logger.info(f"Auto-sync: no items found for {today.year}-{today.month:02d}, syncing now ({fecha_desde} to {fecha_hasta})...")
+            from src.etl.sync_service import SyncService
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                svc = SyncService(db)
+                result = loop.run_until_complete(
+                    svc.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
+                )
+                logger.info(f"Auto-sync items complete: {result}")
+                # Backfill after sync
+                _backfill_venta_items(db)
+            finally:
+                loop.close()
+        else:
+            logger.info(f"Auto-sync items: {count} items already exist for {today.year}-{today.month:02d}, skipping")
+        db.close()
+    except Exception as e:
+        logger.error(f"Error in auto-sync current month items: {e}")
+
+
+def _fix_cartera_orphans():
+    """Deactivate cartera entries for clients no longer assigned to tracked vendedores."""
+    try:
+        from src.etl.sync_service import SyncService
+        db = SessionLocal()
+        svc = SyncService(db)
+        result = svc._sync_cartera_from_clientes()
+        logger.info(f"Cartera fix on startup: {result}")
+        db.close()
+    except Exception as e:
+        logger.error(f"Error fixing cartera orphans: {e}")
+
+
 def _heavy_init():
     try:
         Base.metadata.create_all(bind=engine)
@@ -166,6 +219,9 @@ def _heavy_init():
             db.close()
         start_scheduler()
         logger.info("Background startup complete: DB seeded, scheduler started")
+        # Auto-repair: sync missing items + fix cartera (non-blocking, runs after startup)
+        _fix_cartera_orphans()
+        _auto_sync_current_month_items()
     except Exception as e:
         logger.error(f"Error in background startup: {e}")
 
