@@ -226,8 +226,11 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
         ws.cell(row=row, column=5, value=c['num_docs']).border = THIN_BORDER
+        row_fill = LIGHT_RED_FILL if c['total_ventas'] < 0 else LIGHT_GREEN_FILL
         for col in range(1, 6):
-            ws.cell(row=row, column=col).fill = LIGHT_GREEN_FILL
+            ws.cell(row=row, column=col).fill = row_fill
+        if c['total_ventas'] < 0:
+            cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
         row += 1
 
     row += 1
@@ -405,15 +408,23 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
         ws.cell(row=row_num, column=4, value="Distribuidor").border = THIN_BORDER
 
         for m in range(12):
-            cell = ws.cell(row=row_num, column=5 + m, value=r['months'][m])
+            val = r['months'][m]
+            cell = ws.cell(row=row_num, column=5 + m, value=val)
             cell.number_format = CURRENCY_FORMAT
             cell.border = THIN_BORDER
-            if r['months'][m] == 0:
+            if val < 0:
+                cell.fill = LIGHT_RED_FILL
+                cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
+            elif val == 0:
                 cell.fill = YELLOW_FILL
 
-        cell = ws.cell(row=row_num, column=17, value=r['total'])
+        total_val = r['total']
+        cell = ws.cell(row=row_num, column=17, value=total_val)
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
+        if total_val < 0:
+            cell.fill = LIGHT_RED_FILL
+            cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
 
         cell = ws.cell(row=row_num, column=18, value=r['pct_acumulado'])
         cell.number_format = PERCENT_FORMAT
@@ -430,11 +441,28 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
 
         ws.cell(row=row_num, column=21, value=r['meses_con_venta']).border = THIN_BORDER
 
-        cell = ws.cell(row=row_num, column=22, value=r['ventas_ultimos_3'])
+        ult3_val = r['ventas_ultimos_3']
+        cell = ws.cell(row=row_num, column=22, value=ult3_val)
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
+        if ult3_val < 0:
+            cell.fill = LIGHT_RED_FILL
+            cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
+        elif ult3_val == 0:
+            cell.fill = YELLOW_FILL
 
-        ws.cell(row=row_num, column=23, value=r['nivel_riesgo']).border = THIN_BORDER
+        riesgo_val = r['nivel_riesgo']
+        riesgo_cell = ws.cell(row=row_num, column=23, value=riesgo_val)
+        riesgo_cell.border = THIN_BORDER
+        if riesgo_val == "ALTO":
+            riesgo_cell.fill = RED_FILL
+            riesgo_cell.font = Font(name="Calibri", size=11, color="FFFFFF", bold=True)
+        elif riesgo_val == "MEDIO":
+            riesgo_cell.fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+            riesgo_cell.font = Font(name="Calibri", size=11, color="856404", bold=True)
+        elif riesgo_val == "BAJO":
+            riesgo_cell.fill = LIGHT_GREEN_FILL
+            riesgo_cell.font = Font(name="Calibri", size=11, color="155724", bold=True)
 
     _auto_width(ws)
 

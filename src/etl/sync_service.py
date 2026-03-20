@@ -242,7 +242,6 @@ class SyncService:
     def _sync_cartera_from_clientes(self) -> dict:
         TRACKED_VENDEDORES = ['28856', '28886', '28887', '28891', '28892']
         added = 0
-        reactivated = 0
         deactivated = 0
 
         clientes = self.db.query(ClienteFinal).filter(
@@ -288,10 +287,7 @@ class SyncService:
             ).first()
 
             if existing:
-                if not existing.activo:
-                    existing.activo = True
-                    existing.fecha_baja = None
-                    reactivated += 1
+                pass  # Respeta cambios manuales (no reactivar lo que Gabriel desactivó)
             else:
                 vc = VendedorCartera(
                     tenant_id=self.tenant_id,
@@ -310,8 +306,8 @@ class SyncService:
             logger.error("Error syncing cartera from clientes", exc_info=True)
             return {"error": "commit failed"}
 
-        logger.info(f"Cartera sync: {added} added, {reactivated} reactivated, {deactivated} deactivated")
-        return {"added": added, "reactivated": reactivated, "deactivated": deactivated}
+        logger.info(f"Cartera sync: {added} added, {deactivated} deactivated (manual deactivations preserved)")
+        return {"added": added, "deactivated": deactivated}
 
     async def sync_clientes_contactos(self) -> dict:
         data = await self.client.get_clientes_contactos_all()
