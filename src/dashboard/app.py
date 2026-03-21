@@ -1033,20 +1033,34 @@ elif page == "Vendedores":
                     VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                 ).scalar() or 0
 
+                _all_items_sub = db.query(
+                    VentaItem.venta_id_obuma,
+                    func.sum(VentaItem.total).label('all_total')
+                ).group_by(VentaItem.venta_id_obuma).subquery()
+
+                _mq_items_sub = db.query(
+                    VentaItem.venta_id_obuma,
+                    func.sum(VentaItem.total).label('mq_total')
+                ).filter(
+                    func.lower(VentaItem.producto_sku).like('mq-%')
+                ).group_by(VentaItem.venta_id_obuma).subquery()
+
+                _sign = sql_case(
+                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -1),
+                    else_=1
+                )
                 actual_maq = db.query(func.coalesce(func.sum(
-                    sql_case(
-                        (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaItem.total),
-                        else_=VentaItem.total
-                    )
-                ), 0)).join(
-                    VentaHistorico, VentaHistorico.obuma_id == VentaItem.venta_id_obuma
+                    _sign * VentaHistorico.subtotal * _mq_items_sub.c.mq_total / func.nullif(_all_items_sub.c.all_total, 0)
+                ), 0)).select_from(VentaHistorico).join(
+                    _all_items_sub, _all_items_sub.c.venta_id_obuma == VentaHistorico.obuma_id
+                ).join(
+                    _mq_items_sub, _mq_items_sub.c.venta_id_obuma == VentaHistorico.obuma_id
                 ).filter(
                     VentaHistorico.vendedor_id == vid,
                     extract('year', VentaHistorico.fecha) == rend_anio,
                     extract('month', VentaHistorico.fecha) == rend_mes,
                     VentaHistorico.anulada == False,
-                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
-                    func.lower(VentaItem.producto_sku).like('mq-%')
+                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                 ).scalar() or 0
 
                 actual_rep_result = actual_total_neto - actual_maq
