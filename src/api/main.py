@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from datetime import date, datetime
+import time as _time
+from datetime import date, datetime, timedelta
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text as sa_text
 
 from src.database import get_db, engine, Base, SessionLocal
 from src.models.models import (
@@ -16,6 +17,17 @@ from src.reports.excel_generator import generate_all_vendedor_reports
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_sync_state = {
+    "running": False,
+    "done": False,
+    "step": 0,
+    "total": 0,
+    "label": "",
+    "results": [],
+    "ts": 0,
+}
+_SYNC_STALE_SECONDS = 600
 
 app = FastAPI(
     title="BI Platform - Gabriel Hoyos",
@@ -240,6 +252,132 @@ async def on_startup():
 @app.get("/")
 def root():
     return {"status": "alive"}
+
+
+async def _run_background_sync():
+    """Background coroutine that runs all sync steps and updates _sync_state."""
+    global _sync_state
+    SYNC_STEPS = [
+        ("clientes",         "Clientes y Cartera de Vendedores"),
+        ("ventas",           "Ventas y Documentos Tributarios"),
+        ("ventas_items_inc", "Items de Ventas (ultimos 45 dias)"),
+        ("ventas_cobros",    "Cobros Recibidos"),
+        ("productos",        "Productos y Catalogo"),
+        ("compras",          "Compras y Ordenes"),
+        ("contabilidad",     "Contabilidad y Libro Diario"),
+        ("empleados",        "Empleados y Remuneraciones"),
+    ]
+    total = len(SYNC_STEPS)
+    results = []
+
+    try:
+        for i, (step_key, step_label) in enumerate(SYNC_STEPS):
+            _sync_state.update({
+                "running": True, "done": False,
+                "step": i, "total": total, "label": step_label,
+                "results": list(results), "ts": _time.time(),
+            })
+
+            db = None
+            try:
+                db = SessionLocal()
+                service = SyncService(db)
+
+                if step_key == "ventas_items_inc":
+                    fecha_desde = (date.today() - timedelta(days=45)).strftime("%Y-%m-%d")
+                    fecha_hasta = date.today().strftime("%Y-%m-%d")
+                    result = await asyncio.wait_for(
+                        service.sync_ventas_items_incremental(fecha_desde, fecha_hasta),
+                        timeout=300
+                    )
+                    db.close()
+                    db = SessionLocal()
+                    db.execute(sa_text("""
+                        UPDATE ventas_items SET producto_sku = data_json::json->>'codigo_comercial'
+                        WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL
+                          AND data_json::json->>'codigo_comercial' IS NOT NULL
+                    """))
+                    db.execute(sa_text("""
+                        UPDATE ventas_items SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
+                        WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL
+                    """))
+                    db.commit()
+                elif step_key == "clientes":
+                    result = await asyncio.wait_for(service.sync_clientes(), timeout=300)
+                elif step_key == "ventas":
+                    result = await asyncio.wait_for(service.sync_ventas(), timeout=300)
+                elif step_key == "ventas_cobros":
+                    result = await asyncio.wait_for(service.sync_ventas_cobros(), timeout=300)
+                elif step_key == "productos":
+                    result = await asyncio.wait_for(service.sync_productos(), timeout=300)
+                elif step_key == "compras":
+                    result = await asyncio.wait_for(service.sync_compras(), timeout=300)
+                elif step_key == "contabilidad":
+                    result = await asyncio.wait_for(service.sync_contabilidad(), timeout=300)
+                elif step_key == "empleados":
+                    result = await asyncio.wait_for(service.sync_empleados(), timeout=300)
+                else:
+                    result = {}
+
+                synced = result.get("synced", 0) if isinstance(result, dict) else 0
+                results.append({"label": step_label, "ok": True, "synced": synced})
+            except asyncio.TimeoutError:
+                results.append({"label": step_label, "ok": False, "error": "Timeout (300s)"})
+            except Exception as e:
+                results.append({"label": step_label, "ok": False, "error": str(e)[:120]})
+            finally:
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+    except Exception as e:
+        results.append({"label": "Error general", "ok": False, "error": str(e)[:120]})
+    finally:
+        _sync_state.update({
+            "running": False, "done": True,
+            "step": total, "total": total, "label": "Completado",
+            "results": list(results), "ts": _time.time(),
+        })
+
+
+@app.post("/api/sync/start")
+async def sync_start():
+    global _sync_state
+    if _sync_state["running"]:
+        age = _time.time() - _sync_state.get("ts", 0)
+        if age < _SYNC_STALE_SECONDS:
+            return {"status": "already_running", "step": _sync_state["step"], "total": _sync_state["total"]}
+    _sync_state.update({
+        "running": True, "done": False,
+        "step": 0, "total": 8, "label": "Iniciando...",
+        "results": [], "ts": _time.time(),
+    })
+    asyncio.create_task(_run_background_sync())
+    return {"status": "started"}
+
+
+@app.get("/api/sync/status")
+async def sync_status():
+    global _sync_state
+    if _sync_state["running"] and _sync_state.get("ts"):
+        age = _time.time() - _sync_state["ts"]
+        if age > _SYNC_STALE_SECONDS:
+            _sync_state.update({"running": False, "done": True, "results": [
+                {"label": "Timeout general", "ok": False, "error": "El proceso no respondio en 10 minutos"}
+            ], "ts": _time.time()})
+    return dict(_sync_state)
+
+
+@app.post("/api/sync/reset")
+async def sync_reset():
+    global _sync_state
+    _sync_state.update({
+        "running": False, "done": False,
+        "step": 0, "total": 0, "label": "",
+        "results": [], "ts": 0,
+    })
+    return {"status": "reset"}
 
 
 @app.post("/api/sync/all")

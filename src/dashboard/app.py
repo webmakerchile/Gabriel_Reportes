@@ -8,9 +8,7 @@ from sqlalchemy import func, extract, distinct, case as sql_case
 import os
 import sys
 import asyncio
-import threading
-import time
-import json
+import requests as _requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -295,160 +293,49 @@ def run_async(coro):
         loop.close()
 
 
-_SYNC_PROGRESS_FILE = "/tmp/bi_sync_progress.json"
-_SYNC_STALE_TIMEOUT = 600
+_FASTAPI_BASE = "http://127.0.0.1:8000"
 
 
-def _write_sync_progress(data):
-    import tempfile
+def _api_sync_start():
     try:
-        data["_ts"] = time.time()
-        tmp_fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".json")
-        try:
-            with os.fdopen(tmp_fd, "w") as f:
-                json.dump(data, f)
-            os.replace(tmp_path, _SYNC_PROGRESS_FILE)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+        r = _requests.post(f"{_FASTAPI_BASE}/api/sync/start", timeout=5)
+        return r.json()
+    except Exception:
+        return {"status": "error"}
+
+
+def _api_sync_status():
+    try:
+        r = _requests.get(f"{_FASTAPI_BASE}/api/sync/status", timeout=5)
+        return r.json()
+    except Exception:
+        return {"running": False, "done": False, "step": 0, "total": 0, "label": "", "results": []}
+
+
+def _api_sync_reset():
+    try:
+        _requests.post(f"{_FASTAPI_BASE}/api/sync/reset", timeout=5)
     except Exception:
         pass
-
-
-def _read_sync_progress():
-    try:
-        with open(_SYNC_PROGRESS_FILE, "r") as f:
-            data = json.load(f)
-        if data.get("running") and data.get("_ts"):
-            age = time.time() - data["_ts"]
-            if age > _SYNC_STALE_TIMEOUT:
-                try:
-                    os.remove(_SYNC_PROGRESS_FILE)
-                except Exception:
-                    pass
-                return None
-        return data
-    except (json.JSONDecodeError, FileNotFoundError, OSError):
-        return None
-
-
-def _sync_worker():
-    """Runs the full sync in a background thread. Writes progress to a temp JSON file."""
-    try:
-        _sync_worker_inner()
-    except Exception:
-        _write_sync_progress({
-            "running": False, "done": True,
-            "step": 0, "total": 0, "label": "Error",
-            "results": [{"label": "Error inesperado", "ok": False, "error": "El proceso de sincronización falló"}],
-        })
-
-
-def _sync_worker_inner():
-    SYNC_STEPS = [
-        ("clientes",         "👥 Clientes y Cartera de Vendedores"),
-        ("ventas",           "💰 Ventas y Documentos Tributarios"),
-        ("ventas_items_inc", "📦 Items de Ventas (últimos 45 días)"),
-        ("ventas_cobros",    "💳 Cobros Recibidos"),
-        ("productos",        "🔧 Productos y Catálogo"),
-        ("compras",          "🛒 Compras y Órdenes"),
-        ("contabilidad",     "📊 Contabilidad y Libro Diario"),
-        ("empleados",        "👤 Empleados y Remuneraciones"),
-    ]
-    total = len(SYNC_STEPS)
-    results = []
-
-    STEP_TIMEOUT = 300
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    for i, (step_key, step_label) in enumerate(SYNC_STEPS):
-        _write_sync_progress({
-            "running": True, "done": False,
-            "step": i, "total": total, "label": step_label,
-            "results": results,
-        })
-
-        db = None
-        try:
-            db = SessionLocal()
-            service = SyncService(db)
-
-            async def _run_step(_service, _key, _db):
-                if _key == "ventas_items_inc":
-                    from sqlalchemy import text as _sa_text
-                    fecha_desde = (date.today() - timedelta(days=45)).strftime("%Y-%m-%d")
-                    fecha_hasta = date.today().strftime("%Y-%m-%d")
-                    _result = await _service.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
-                    _db.close()
-                    _db2 = SessionLocal()
-                    try:
-                        _db2.execute(_sa_text("""
-                            UPDATE ventas_items SET producto_sku = data_json::json->>'codigo_comercial'
-                            WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL
-                              AND data_json::json->>'codigo_comercial' IS NOT NULL
-                        """))
-                        _db2.execute(_sa_text("""
-                            UPDATE ventas_items SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
-                            WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL
-                        """))
-                        _db2.commit()
-                    finally:
-                        _db2.close()
-                    return _result
-                elif _key == "clientes":
-                    return await _service.sync_clientes()
-                elif _key == "ventas":
-                    return await _service.sync_ventas()
-                elif _key == "ventas_cobros":
-                    return await _service.sync_ventas_cobros()
-                elif _key == "productos":
-                    return await _service.sync_productos()
-                elif _key == "compras":
-                    return await _service.sync_compras()
-                elif _key == "contabilidad":
-                    return await _service.sync_contabilidad()
-                elif _key == "empleados":
-                    return await _service.sync_empleados()
-                return {}
-
-            result = loop.run_until_complete(
-                asyncio.wait_for(_run_step(service, step_key, db), timeout=STEP_TIMEOUT)
-            )
-
-            synced = result.get("synced", 0) if isinstance(result, dict) else 0
-            results.append({"label": step_label, "ok": True, "synced": synced})
-        except asyncio.TimeoutError:
-            results.append({"label": step_label, "ok": False, "error": f"Timeout ({STEP_TIMEOUT}s)"})
-        except Exception as e:
-            results.append({"label": step_label, "ok": False, "error": str(e)[:120]})
-        finally:
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-
-    try:
-        loop.close()
-    except Exception:
-        pass
-
-    _write_sync_progress({
-        "running": False, "done": True,
-        "step": total, "total": total, "label": "Completado",
-        "results": results,
-    })
 
 
 def _run_full_sync_ui():
-    """Non-blocking sync UI: starts a background thread and polls progress."""
-    progress = _read_sync_progress()
+    """Non-blocking sync UI using FastAPI background task + st.fragment polling."""
+    if not st.session_state.get("_sync_started"):
+        status = _api_sync_status()
+        if not status.get("running") and not status.get("done"):
+            _api_sync_start()
+        st.session_state._sync_started = True
 
-    if progress and progress.get("running"):
+    _sync_progress_fragment()
+
+
+@st.fragment(run_every=timedelta(seconds=3))
+def _sync_progress_fragment():
+    """Fragment that auto-refreshes every 3s to poll FastAPI sync status."""
+    progress = _api_sync_status()
+
+    if progress.get("running"):
         step = progress.get("step", 0)
         total = progress.get("total", 8)
         label = progress.get("label", "...")
@@ -486,13 +373,9 @@ def _run_full_sync_ui():
                     rows += f'<div style="color:{ACCENT_RED};font-size:0.85rem;padding:2px 0;">❌ {r["label"]}: {r.get("error","")}</div>'
             st.markdown(f'<div style="background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:8px;padding:12px 16px;margin-top:12px;">{rows}</div>', unsafe_allow_html=True)
 
-        time.sleep(2)
-        st.rerun()
-
-    elif progress and progress.get("done"):
+    elif progress.get("done"):
         results = progress.get("results", [])
         ok_count = sum(1 for r in results if r.get("ok"))
-        err_count = len(results) - ok_count
         total_synced = sum(r.get("synced", 0) for r in results if r.get("ok"))
 
         st.markdown(f"""
@@ -533,23 +416,21 @@ def _run_full_sync_ui():
         </div>
         """, unsafe_allow_html=True)
 
-        try:
-            os.remove(_SYNC_PROGRESS_FILE)
-        except Exception:
-            pass
-
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("📊 Ver Dashboard Actualizado", type="primary", use_container_width=True, key="btn_goto_dashboard"):
+            _api_sync_reset()
             st.session_state.syncing_now = False
+            st.session_state._sync_started = False
             st.session_state.sync_done = True
             st.rerun()
 
     else:
-        _write_sync_progress({"running": True, "done": False, "step": 0, "total": 8, "label": "Iniciando...", "results": []})
-        thread = threading.Thread(target=_sync_worker, daemon=True)
-        thread.start()
-        time.sleep(1)
-        st.rerun()
+        st.markdown(f"""
+        <div style="text-align:center;padding:48px 0;">
+            <span style="font-size:2rem;">⏳</span>
+            <p style="color:{TEXT_SECONDARY};">Conectando con el servidor...</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 def format_clp(value):
@@ -619,9 +500,10 @@ div[data-testid="stSidebar"] button[kind="primary"]:hover {
 """, unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 ACTUALIZAR AHORA", use_container_width=True, type="primary", key="btn_actualizar_sidebar"):
-    existing = _read_sync_progress()
-    if not (existing and existing.get("running")):
+    status = _api_sync_status()
+    if not status.get("running"):
         st.session_state.syncing_now = True
+        st.session_state._sync_started = False
         st.rerun()
 
 st.sidebar.markdown("---")
@@ -645,8 +527,8 @@ if st.sidebar.button("🔒 Cerrar Sesión", use_container_width=True):
 # ============================================================
 # ACTUALIZAR AHORA - Intercepta toda la navegación si está activo
 # ============================================================
-_active_sync = _read_sync_progress()
-if st.session_state.get("syncing_now", False) or (_active_sync and (_active_sync.get("running") or _active_sync.get("done"))):
+_active_sync = _api_sync_status()
+if st.session_state.get("syncing_now", False) or _active_sync.get("running") or _active_sync.get("done"):
     _run_full_sync_ui()
     st.stop()
 
@@ -3103,6 +2985,7 @@ elif page == "Sincronizacion":
         with col1:
             if st.button("Sincronizar Todo", type="primary", use_container_width=True):
                 st.session_state.syncing_now = True
+                st.session_state._sync_started = False
                 st.rerun()
 
         with col2:
