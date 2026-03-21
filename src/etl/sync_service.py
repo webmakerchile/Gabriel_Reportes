@@ -255,8 +255,9 @@ class SyncService:
             except (json.JSONDecodeError, TypeError):
                 continue
 
+            cliente_activo = str(data.get('cliente_activo', '1') or '1')
             rel_usuario_id = str(data.get('rel_usuario_id', '0') or '0')
-            if rel_usuario_id == '0' or rel_usuario_id not in TRACKED_VENDEDORES:
+            if rel_usuario_id == '0' or rel_usuario_id not in TRACKED_VENDEDORES or cliente_activo == '0':
                 # Cliente sin vendedor tracked: desactivar cualquier cartera activa
                 orphan_assignments = self.db.query(VendedorCartera).filter(
                     VendedorCartera.tenant_id == self.tenant_id,
