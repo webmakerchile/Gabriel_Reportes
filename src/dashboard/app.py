@@ -294,6 +294,8 @@ def run_async(coro):
 
 def _run_full_sync_ui():
     """Pantalla de actualización completa con barra de progreso por módulo."""
+    st.session_state.syncing_now = False
+
     SYNC_STEPS = [
         ("clientes",         "👥 Clientes y Cartera de Vendedores"),
         ("ventas",           "💰 Ventas y Documentos Tributarios"),
@@ -318,71 +320,77 @@ def _run_full_sync_ui():
     status_card = st.empty()
     results_area = st.empty()
 
-    db = get_db()
-    service = SyncService(db)
     results = []
 
-    try:
-        for i, (step_key, step_label) in enumerate(SYNC_STEPS):
-            pct = int(i / total * 100)
-            progress_bar.progress(i / total, text=f"Paso {i+1}/{total}: {step_label}")
-            status_card.markdown(f"""
-            <div style="background:{CARD_BG};border:1px solid {ACCENT_BLUE};border-radius:12px;
-                        padding:18px 24px;margin:12px 0;display:flex;align-items:center;gap:16px;">
-                <span style="font-size:1.8rem;">⏳</span>
-                <div>
-                    <p style="color:{ACCENT_BLUE};font-weight:700;font-size:1.05rem;margin:0;">{step_label}</p>
-                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
-                        Consultando API de Obuma... ({pct}% completado)
-                    </p>
-                </div>
+    for i, (step_key, step_label) in enumerate(SYNC_STEPS):
+        pct = int(i / total * 100)
+        progress_bar.progress(i / total, text=f"Paso {i+1}/{total}: {step_label}")
+        status_card.markdown(f"""
+        <div style="background:{CARD_BG};border:1px solid {ACCENT_BLUE};border-radius:12px;
+                    padding:18px 24px;margin:12px 0;display:flex;align-items:center;gap:16px;">
+            <span style="font-size:1.8rem;">⏳</span>
+            <div>
+                <p style="color:{ACCENT_BLUE};font-weight:700;font-size:1.05rem;margin:0;">{step_label}</p>
+                <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
+                    Consultando API de Obuma... ({pct}% completado)
+                </p>
             </div>
-            """, unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
 
-            try:
-                if step_key == "ventas_items_inc":
-                    fecha_desde = (date.today() - timedelta(days=45)).strftime("%Y-%m-%d")
-                    fecha_hasta = date.today().strftime("%Y-%m-%d")
-                    result = run_async(service.sync_ventas_items_incremental(fecha_desde, fecha_hasta))
-                    from sqlalchemy import text as _sa_text
-                    _db2 = get_db()
-                    try:
-                        _db2.execute(_sa_text("""
-                            UPDATE ventas_items SET producto_sku = data_json::json->>'codigo_comercial'
-                            WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL
-                              AND data_json::json->>'codigo_comercial' IS NOT NULL
-                        """))
-                        _db2.execute(_sa_text("""
-                            UPDATE ventas_items SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
-                            WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL
-                        """))
-                        _db2.commit()
-                    finally:
-                        _db2.close()
-                elif step_key == "clientes":
-                    result = run_async(service.sync_clientes())
-                elif step_key == "ventas":
-                    result = run_async(service.sync_ventas())
-                elif step_key == "ventas_cobros":
-                    result = run_async(service.sync_ventas_cobros())
-                elif step_key == "productos":
-                    result = run_async(service.sync_productos())
-                elif step_key == "compras":
-                    result = run_async(service.sync_compras())
-                elif step_key == "contabilidad":
-                    result = run_async(service.sync_contabilidad())
-                elif step_key == "empleados":
-                    result = run_async(service.sync_empleados())
-                else:
-                    result = {}
+        db = None
+        try:
+            db = get_db()
+            service = SyncService(db)
 
-                synced = result.get("synced", 0) if isinstance(result, dict) else 0
-                results.append({"label": step_label, "ok": True, "synced": synced})
-            except Exception as e:
-                results.append({"label": step_label, "ok": False, "error": str(e)[:120]})
+            if step_key == "ventas_items_inc":
+                fecha_desde = (date.today() - timedelta(days=45)).strftime("%Y-%m-%d")
+                fecha_hasta = date.today().strftime("%Y-%m-%d")
+                result = run_async(service.sync_ventas_items_incremental(fecha_desde, fecha_hasta))
+                db.close()
+                db = None
+                from sqlalchemy import text as _sa_text
+                _db2 = get_db()
+                try:
+                    _db2.execute(_sa_text("""
+                        UPDATE ventas_items SET producto_sku = data_json::json->>'codigo_comercial'
+                        WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL
+                          AND data_json::json->>'codigo_comercial' IS NOT NULL
+                    """))
+                    _db2.execute(_sa_text("""
+                        UPDATE ventas_items SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
+                        WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL
+                    """))
+                    _db2.commit()
+                finally:
+                    _db2.close()
+            elif step_key == "clientes":
+                result = run_async(service.sync_clientes())
+            elif step_key == "ventas":
+                result = run_async(service.sync_ventas())
+            elif step_key == "ventas_cobros":
+                result = run_async(service.sync_ventas_cobros())
+            elif step_key == "productos":
+                result = run_async(service.sync_productos())
+            elif step_key == "compras":
+                result = run_async(service.sync_compras())
+            elif step_key == "contabilidad":
+                result = run_async(service.sync_contabilidad())
+            elif step_key == "empleados":
+                result = run_async(service.sync_empleados())
+            else:
+                result = {}
 
-    finally:
-        db.close()
+            synced = result.get("synced", 0) if isinstance(result, dict) else 0
+            results.append({"label": step_label, "ok": True, "synced": synced})
+        except Exception as e:
+            results.append({"label": step_label, "ok": False, "error": str(e)[:120]})
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     progress_bar.progress(1.0, text="✅ ¡Sincronización completada!")
     status_card.markdown(f"""
@@ -2992,25 +3000,46 @@ elif page == "Sincronizacion":
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Sincronizar Todo", type="primary", use_container_width=True):
-                with st.spinner("Conectando con Obuma y sincronizando todos los modulos..."):
-                    service = SyncService(db)
-                    results = run_async(service.sync_all())
-                    st.success("Sincronizacion completada")
+                sync_steps_map = {
+                    "clientes": "sync_clientes",
+                    "ventas": "sync_ventas",
+                    "ventas_cobros": "sync_ventas_cobros",
+                    "productos": "sync_productos",
+                    "compras": "sync_compras",
+                    "contabilidad": "sync_contabilidad",
+                    "empleados": "sync_empleados",
+                }
+                all_results = {}
+                sync_progress = st.progress(0, text="Sincronizando...")
+                for idx, (mod_key, method_name) in enumerate(sync_steps_map.items()):
+                    sync_progress.progress(idx / len(sync_steps_map), text=f"Sincronizando {mod_key}...")
+                    _sdb = get_db()
+                    try:
+                        _svc = SyncService(_sdb)
+                        method = getattr(_svc, method_name, None)
+                        if method:
+                            all_results[mod_key] = run_async(method())
+                    except Exception as _sync_err:
+                        all_results[mod_key] = {"error": str(_sync_err)[:120]}
+                    finally:
+                        _sdb.close()
+                sync_progress.progress(1.0, text="Completado")
+                st.success("Sincronizacion completada")
 
-                    for module, result in results.items():
-                        if isinstance(result, dict) and "error" not in result:
-                            st.markdown(f"""
-                            <div class="sync-result-ok">
-                                <strong>{module.replace('_', ' ').title()}</strong>: {result.get('synced', 0)} registros
-                                (API: {result.get('total_api', 0)} | BD: {result.get('total_db', 0)})
-                            </div>
-                            """, unsafe_allow_html=True)
-                        elif isinstance(result, dict) and "error" in result:
-                            st.markdown(f"""
-                            <div class="sync-result-error">
-                                <strong>{module.replace('_', ' ').title()}</strong>: {str(result.get('error', ''))[:100]}
-                            </div>
-                            """, unsafe_allow_html=True)
+                for module, result in all_results.items():
+                    if isinstance(result, dict) and "error" not in result:
+                        st.markdown(f"""
+                        <div class="sync-result-ok">
+                            <strong>{module.replace('_', ' ').title()}</strong>: {result.get('synced', 0)} registros
+                            (API: {result.get('total_api', 0)} | BD: {result.get('total_db', 0)})
+                        </div>
+                        """, unsafe_allow_html=True)
+                    elif isinstance(result, dict) and "error" in result:
+                        st.markdown(f"""
+                        <div class="sync-result-error">
+                            <strong>{module.replace('_', ' ').title()}</strong>: {str(result.get('error', ''))[:100]}
+                        </div>
+                        """, unsafe_allow_html=True)
 
         with col2:
             all_modules = [
