@@ -189,12 +189,68 @@ def check_email_config() -> dict:
     sendgrid_key = os.environ.get("SENDGRID_API_KEY")
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_user = os.environ.get("SMTP_USER")
+    from_email = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 
     if resend_key:
-        return {"configured": True, "method": "Resend", "detail": "API Key configurada"}
+        sandbox = from_email == "onboarding@resend.dev"
+        return {
+            "configured": True,
+            "method": "Resend",
+            "detail": "API Key configurada",
+            "sandbox": sandbox,
+            "from_email": from_email,
+        }
     elif sendgrid_key:
-        return {"configured": True, "method": "SendGrid", "detail": "API Key configurada"}
+        return {"configured": True, "method": "SendGrid", "detail": "API Key configurada", "sandbox": False, "from_email": from_email}
     elif smtp_host and smtp_user:
-        return {"configured": True, "method": "SMTP", "detail": f"Servidor: {smtp_host}"}
+        return {"configured": True, "method": "SMTP", "detail": f"Servidor: {smtp_host}", "sandbox": False, "from_email": from_email}
     else:
-        return {"configured": False, "method": None, "detail": "Sin configurar."}
+        return {"configured": False, "method": None, "detail": "Sin configurar.", "sandbox": False, "from_email": None}
+
+
+def test_email_delivery(to_email: str) -> dict:
+    """Send a real test email and return success/error info."""
+    resend_key = os.environ.get("RESEND_API_KEY")
+    from_email = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
+    from_name = os.environ.get("EMAIL_FROM_NAME", "BI Platform - VLSur")
+
+    if not resend_key:
+        return {"success": False, "error": "No hay servicio de email configurado."}
+
+    try:
+        import httpx
+        payload = {
+            "from": f"{from_name} <{from_email}>",
+            "to": [to_email],
+            "subject": "Prueba de entrega - BI Platform VLSur",
+            "html": f"""
+            <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;border:1px solid #eee;border-radius:8px;">
+                <h2 style="color:#2F5496;margin:0 0 16px;">BI Platform - VLSur</h2>
+                <p style="color:#333;">Este es un correo de prueba enviado desde el sistema de reportes.</p>
+                <p style="color:#333;">Si recibiste este mensaje, el envio de reportes automaticos esta funcionando correctamente.</p>
+                <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
+                <p style="color:#999;font-size:12px;">Enviado: {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
+            </div>
+            """
+        }
+        resp = httpx.post(
+            "https://api.resend.com/emails",
+            json=payload,
+            headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+            timeout=15
+        )
+        if resp.status_code in (200, 201, 202):
+            return {"success": True, "method": "resend", "recipient": to_email}
+        else:
+            data = resp.json() if resp.content else {}
+            msg = data.get("message", resp.text)
+            if "own email address" in msg:
+                account_email = msg.split("(")[-1].split(")")[0] if "(" in msg else "tu cuenta"
+                return {
+                    "success": False,
+                    "sandbox": True,
+                    "error": f"Resend en modo sandbox: solo puede enviar a {account_email}. Debes verificar el dominio vlsur.cl en resend.com/domains y configurar EMAIL_FROM."
+                }
+            return {"success": False, "error": msg}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

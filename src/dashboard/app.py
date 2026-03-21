@@ -30,7 +30,7 @@ from src.models.models import (
 from src.etl.sync_service import SyncService
 from src.etl.obuma_client import ObumaClient
 from src.reports.excel_generator import generate_vendedor_report, generate_all_vendedor_reports
-from src.reports.email_service import send_report_email, build_report_email_html, check_email_config
+from src.reports.email_service import send_report_email, build_report_email_html, check_email_config, test_email_delivery
 from src.models.models import ReporteProgramado
 
 Base.metadata.create_all(bind=engine)
@@ -2877,15 +2877,22 @@ elif page == "Reportes":
             email_cfg = check_email_config()
 
             if email_cfg["configured"]:
+                is_sandbox = email_cfg.get("sandbox", False)
+                status_color = ACCENT_AMBER if is_sandbox else ACCENT_GREEN
+                status_icon = "⚠️" if is_sandbox else "✅"
+                status_label = "Resend Activo — Dominio sin verificar (modo sandbox)" if is_sandbox else f"Email Configurado · {email_cfg['method']}"
+                status_detail = (
+                    f"Remitente actual: <code>onboarding@resend.dev</code> (sandbox). Solo puede enviar a la cuenta del propietario de Resend. Para enviar a cualquier destinatario, debes verificar el dominio <strong>vlsur.cl</strong> en Resend."
+                    if is_sandbox else
+                    f"Metodo: {email_cfg['method']} · {email_cfg['detail']} · Remitente: {email_cfg.get('from_email','')}"
+                )
                 st.markdown(f"""
-                <div class="metric-card" style="border-left:4px solid {ACCENT_GREEN};">
+                <div class="metric-card" style="border-left:4px solid {status_color};">
                     <div style="display:flex;align-items:center;gap:12px;">
-                        <span style="font-size:2rem;">✅</span>
+                        <span style="font-size:2rem;">{status_icon}</span>
                         <div>
-                            <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">Email Configurado</p>
-                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
-                                Metodo: {email_cfg['method']} · {email_cfg['detail']}
-                            </p>
+                            <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">{status_label}</p>
+                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">{status_detail}</p>
                         </div>
                     </div>
                 </div>
@@ -2894,12 +2901,10 @@ elif page == "Reportes":
                 st.markdown(f"""
                 <div class="metric-card" style="border-left:4px solid {ACCENT_RED};">
                     <div style="display:flex;align-items:center;gap:12px;">
-                        <span style="font-size:2rem;">⚠️</span>
+                        <span style="font-size:2rem;">❌</span>
                         <div>
                             <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">Email No Configurado</p>
-                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
-                                {email_cfg['detail']}
-                            </p>
+                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">{email_cfg['detail']}</p>
                         </div>
                     </div>
                 </div>
@@ -2907,34 +2912,44 @@ elif page == "Reportes":
 
             st.markdown("")
 
-            with st.expander("📋 Variables de Entorno Necesarias", expanded=not email_cfg["configured"]):
+            if email_cfg.get("sandbox"):
+                with st.expander("🔑 Pasos para activar envio a cualquier destinatario (Resend)", expanded=True):
+                    st.markdown(f"""
+                    <div class="data-card" style="border-left:4px solid {ACCENT_AMBER};">
+                        <p style="color:{TEXT_PRIMARY};font-weight:700;margin:0 0 12px;font-size:1rem;">Como verificar el dominio vlsur.cl en Resend</p>
+                        <ol style="color:{TEXT_SECONDARY};font-size:0.9rem;margin:0;padding-left:20px;line-height:1.8;">
+                            <li>Inicia sesion en <a href="https://resend.com" target="_blank" style="color:{ACCENT_BLUE};">resend.com</a> con la cuenta <strong>reportesvlsurspa@gmail.com</strong></li>
+                            <li>Ve a <strong>Domains</strong> → <strong>Add Domain</strong></li>
+                            <li>Escribe <strong>vlsur.cl</strong> y haz clic en <strong>Add</strong></li>
+                            <li>Resend te mostrara registros DNS (DKIM, SPF, DMARC) — agregalos en tu proveedor DNS</li>
+                            <li>Espera 5-30 minutos y haz clic en <strong>Verify</strong></li>
+                            <li>Una vez verificado, agrega la variable de entorno:<br>
+                                <code style="background:#f5f5f5;padding:2px 6px;border-radius:3px;">EMAIL_FROM = reportes@vlsur.cl</code>
+                            </li>
+                            <li>Reinicia la aplicacion — los reportes comenzaran a llegar a <strong>gabrielhoyos@vlsur.cl</strong></li>
+                        </ol>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with st.expander("📋 Variables de Entorno", expanded=not email_cfg["configured"]):
                 st.markdown(f"""
                 <div class="data-card">
-                    <p style="color:{ACCENT_BLUE};font-weight:600;margin:0 0 8px;">Opcion 1: SendGrid (Recomendado)</p>
+                    <p style="color:{ACCENT_BLUE};font-weight:600;margin:0 0 8px;">Resend (activo) — para activar dominio propio</p>
                     <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">
-                        <code>SENDGRID_API_KEY</code> — API Key de SendGrid
+                        <code>EMAIL_FROM</code> — Email remitente una vez verificado el dominio (ej: <code>reportes@vlsur.cl</code>)<br>
+                        <code>EMAIL_FROM_NAME</code> — Nombre remitente (default: BI Platform - VLSur)
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
                 st.markdown("")
                 st.markdown(f"""
                 <div class="data-card">
-                    <p style="color:{ACCENT_AMBER};font-weight:600;margin:0 0 8px;">Opcion 2: SMTP</p>
+                    <p style="color:{ACCENT_AMBER};font-weight:600;margin:0 0 8px;">Alternativa: SMTP (Gmail Workspace, etc.)</p>
                     <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">
-                        <code>SMTP_HOST</code> — Servidor SMTP<br>
+                        <code>SMTP_HOST</code> — Servidor SMTP (ej: smtp.gmail.com)<br>
                         <code>SMTP_PORT</code> — Puerto (default: 587)<br>
                         <code>SMTP_USER</code> — Usuario SMTP<br>
                         <code>SMTP_PASS</code> — Contrasena SMTP
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
-                st.markdown("")
-                st.markdown(f"""
-                <div class="data-card">
-                    <p style="color:{ACCENT_GREEN};font-weight:600;margin:0 0 8px;">Variables Comunes (Opcionales)</p>
-                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">
-                        <code>EMAIL_FROM</code> — Email remitente (default: reportes@vlsur.cl)<br>
-                        <code>EMAIL_FROM_NAME</code> — Nombre remitente (default: BI Platform - VLSur)
                     </p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -2944,7 +2959,7 @@ elif page == "Reportes":
 
             tc1, tc2 = st.columns([3, 1])
             with tc1:
-                test_email = st.text_input("Email de prueba", placeholder="gabriel@vlsur.cl", key="rpt_test_email")
+                test_email = st.text_input("Email de prueba", value="gabrielhoyos@vlsur.cl", key="rpt_test_email")
             with tc2:
                 st.markdown("")
                 if st.button("Enviar Test", type="primary", use_container_width=True, key="rpt_test_send"):
@@ -2954,18 +2969,11 @@ elif page == "Reportes":
                         st.error("Configure el servicio de email primero.")
                     else:
                         with st.spinner("Enviando email de prueba..."):
-                            test_body = build_report_email_html(
-                                "Prueba",
-                                "Email de Prueba",
-                                datetime.now().strftime("%d/%m/%Y %H:%M")
-                            )
-                            result = send_report_email(
-                                [test_email.strip()],
-                                "Test - BI Platform Email",
-                                test_body
-                            )
+                            result = test_email_delivery(test_email.strip())
                             if result.get("success"):
-                                st.success(f"Email de prueba enviado a {test_email}")
+                                st.success(f"✅ Email de prueba enviado correctamente a {test_email}. Revisa tu bandeja de entrada.")
+                            elif result.get("sandbox"):
+                                st.warning(f"⚠️ Dominio sin verificar. {result.get('error', '')}")
                             else:
                                 st.error(f"Error: {result.get('error', 'Error desconocido')}")
     finally:

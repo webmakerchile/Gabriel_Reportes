@@ -101,6 +101,7 @@ def _seed_reportes_programados(db):
     from datetime import datetime, timedelta
 
     REPORTES_CONFIG = [
+        {"nombre": "Reporte Semanal - Gabriel Hoyos",       "vendedor_obuma_id": "28856", "email_principal": "gabrielhoyos@vlsur.cl"},
         {"nombre": "Reporte Semanal - Ernesto Quintiliani", "vendedor_obuma_id": "28887", "email_principal": "ventas.ernesto.q@gmail.com"},
         {"nombre": "Reporte Semanal - Jhonatan Ruiz",       "vendedor_obuma_id": "28886", "email_principal": "ventas.jhonatan.ruiz@gmail.com"},
         {"nombre": "Reporte Semanal - Pablo Pinto",         "vendedor_obuma_id": "28891", "email_principal": "vicentepinto@vlsur.cl"},
@@ -120,7 +121,10 @@ def _seed_reportes_programados(db):
             ReporteProgramado.frecuencia == "semanal",
             ReporteProgramado.tenant_id == 1
         ).first()
-        emails = f"{cfg['email_principal']},\n{GABRIEL_EMAIL}"
+        if cfg['email_principal'] == GABRIEL_EMAIL:
+            emails = GABRIEL_EMAIL
+        else:
+            emails = f"{cfg['email_principal']},\n{GABRIEL_EMAIL}"
         if not existing:
             db.add(ReporteProgramado(
                 tenant_id=1,
@@ -141,7 +145,7 @@ def _seed_reportes_programados(db):
             if GABRIEL_EMAIL not in (existing.emails_destino or ""):
                 existing.emails_destino = emails
     db.commit()
-    logger.info("Reportes programados seeded/verified (4 semanales viernes 18:30)")
+    logger.info("Reportes programados seeded/verified (5 semanales viernes 18:30)")
 
 
 def _auto_sync_current_month_items():
