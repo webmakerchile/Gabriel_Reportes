@@ -256,6 +256,7 @@ def root():
 
 def _run_sync_step_blocking(step_key: str):
     """Run a single sync step in a blocking fashion (called from thread pool)."""
+    logger.info(f"Sync thread starting step: {step_key}")
     db = SessionLocal()
     try:
         service = SyncService(db)
@@ -297,7 +298,11 @@ def _run_sync_step_blocking(step_key: str):
                 result = {}
         finally:
             loop.close()
+        logger.info(f"Sync thread completed step: {step_key} -> {result}")
         return result
+    except Exception as e:
+        logger.error(f"Sync thread error in step {step_key}: {e}", exc_info=True)
+        raise
     finally:
         try:
             db.close()

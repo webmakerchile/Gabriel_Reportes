@@ -46,9 +46,16 @@ st.set_page_config(
 # ── LOGIN ──────────────────────────────────────────────────────────────────
 _VALID_USER = os.environ.get("DASHBOARD_USER", "gabriel")
 _VALID_PASS = os.environ.get("DASHBOARD_PASSWORD", "vlsur2026")
+import hashlib as _hashlib
+_AUTH_TOKEN = _hashlib.sha256(f"{_VALID_USER}:{_VALID_PASS}:bi_platform_2026".encode()).hexdigest()[:24]
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    if st.query_params.get("auth") == _AUTH_TOKEN:
+        st.session_state.authenticated = True
+        st.rerun()
 
 if not st.session_state.authenticated:
     st.markdown("""
@@ -78,6 +85,7 @@ if not st.session_state.authenticated:
         if submitted:
             if user_input.strip() == _VALID_USER and pass_input == _VALID_PASS:
                 st.session_state.authenticated = True
+                st.query_params["auth"] = _AUTH_TOKEN
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
@@ -521,6 +529,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption("v2.0 | Powered by Obuma ERP")
 if st.sidebar.button("🔒 Cerrar Sesión", use_container_width=True):
     st.session_state.authenticated = False
+    st.query_params.clear()
     st.rerun()
 
 
