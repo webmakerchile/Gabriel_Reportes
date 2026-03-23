@@ -254,8 +254,59 @@ def root():
     return {"status": "alive"}
 
 
+def _run_sync_step_blocking(step_key: str):
+    """Run a single sync step in a blocking fashion (called from thread pool)."""
+    db = SessionLocal()
+    try:
+        service = SyncService(db)
+        loop = asyncio.new_event_loop()
+        try:
+            if step_key == "ventas_items_inc":
+                fecha_desde = (date.today() - timedelta(days=45)).strftime("%Y-%m-%d")
+                fecha_hasta = date.today().strftime("%Y-%m-%d")
+                result = loop.run_until_complete(
+                    service.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
+                )
+                db.close()
+                db = SessionLocal()
+                db.execute(sa_text("""
+                    UPDATE ventas_items SET producto_sku = data_json::json->>'codigo_comercial'
+                    WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL
+                      AND data_json::json->>'codigo_comercial' IS NOT NULL
+                """))
+                db.execute(sa_text("""
+                    UPDATE ventas_items SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
+                    WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL
+                """))
+                db.commit()
+            elif step_key == "clientes":
+                result = loop.run_until_complete(service.sync_clientes())
+            elif step_key == "ventas":
+                result = loop.run_until_complete(service.sync_ventas())
+            elif step_key == "ventas_cobros":
+                result = loop.run_until_complete(service.sync_ventas_cobros())
+            elif step_key == "productos":
+                result = loop.run_until_complete(service.sync_productos())
+            elif step_key == "compras":
+                result = loop.run_until_complete(service.sync_compras())
+            elif step_key == "contabilidad":
+                result = loop.run_until_complete(service.sync_contabilidad())
+            elif step_key == "empleados":
+                result = loop.run_until_complete(service.sync_empleados())
+            else:
+                result = {}
+        finally:
+            loop.close()
+        return result
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
 async def _run_background_sync():
-    """Background coroutine that runs all sync steps and updates _sync_state."""
+    """Background coroutine that runs sync steps in thread pool to avoid blocking event loop."""
     global _sync_state
     SYNC_STEPS = [
         ("clientes",         "Clientes y Cartera de Vendedores"),
@@ -278,59 +329,17 @@ async def _run_background_sync():
                 "results": list(results), "ts": _time.time(),
             })
 
-            db = None
             try:
-                db = SessionLocal()
-                service = SyncService(db)
-
-                if step_key == "ventas_items_inc":
-                    fecha_desde = (date.today() - timedelta(days=45)).strftime("%Y-%m-%d")
-                    fecha_hasta = date.today().strftime("%Y-%m-%d")
-                    result = await asyncio.wait_for(
-                        service.sync_ventas_items_incremental(fecha_desde, fecha_hasta),
-                        timeout=300
-                    )
-                    db.close()
-                    db = SessionLocal()
-                    db.execute(sa_text("""
-                        UPDATE ventas_items SET producto_sku = data_json::json->>'codigo_comercial'
-                        WHERE (producto_sku IS NULL OR producto_sku = '') AND data_json IS NOT NULL
-                          AND data_json::json->>'codigo_comercial' IS NOT NULL
-                    """))
-                    db.execute(sa_text("""
-                        UPDATE ventas_items SET total = COALESCE((data_json::json->>'subtotal')::float, 0)
-                        WHERE (total = 0 OR total IS NULL) AND data_json IS NOT NULL
-                    """))
-                    db.commit()
-                elif step_key == "clientes":
-                    result = await asyncio.wait_for(service.sync_clientes(), timeout=300)
-                elif step_key == "ventas":
-                    result = await asyncio.wait_for(service.sync_ventas(), timeout=300)
-                elif step_key == "ventas_cobros":
-                    result = await asyncio.wait_for(service.sync_ventas_cobros(), timeout=300)
-                elif step_key == "productos":
-                    result = await asyncio.wait_for(service.sync_productos(), timeout=300)
-                elif step_key == "compras":
-                    result = await asyncio.wait_for(service.sync_compras(), timeout=300)
-                elif step_key == "contabilidad":
-                    result = await asyncio.wait_for(service.sync_contabilidad(), timeout=300)
-                elif step_key == "empleados":
-                    result = await asyncio.wait_for(service.sync_empleados(), timeout=300)
-                else:
-                    result = {}
-
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_run_sync_step_blocking, step_key),
+                    timeout=300
+                )
                 synced = result.get("synced", 0) if isinstance(result, dict) else 0
                 results.append({"label": step_label, "ok": True, "synced": synced})
             except asyncio.TimeoutError:
                 results.append({"label": step_label, "ok": False, "error": "Timeout (300s)"})
             except Exception as e:
                 results.append({"label": step_label, "ok": False, "error": str(e)[:120]})
-            finally:
-                if db is not None:
-                    try:
-                        db.close()
-                    except Exception:
-                        pass
     except Exception as e:
         results.append({"label": "Error general", "ok": False, "error": str(e)[:120]})
     finally:
