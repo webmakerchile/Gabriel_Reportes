@@ -27,7 +27,7 @@ _sync_state = {
     "results": [],
     "ts": 0,
 }
-_SYNC_STALE_SECONDS = 600
+_SYNC_STALE_SECONDS = 1200
 
 app = FastAPI(
     title="BI Platform - Gabriel Hoyos",
@@ -334,15 +334,16 @@ async def _run_background_sync():
                 "results": list(results), "ts": _time.time(),
             })
 
+            step_timeout = 900 if step_key in ("clientes", "ventas") else 600
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(_run_sync_step_blocking, step_key),
-                    timeout=300
+                    timeout=step_timeout
                 )
                 synced = result.get("synced", 0) if isinstance(result, dict) else 0
                 results.append({"label": step_label, "ok": True, "synced": synced})
             except asyncio.TimeoutError:
-                results.append({"label": step_label, "ok": False, "error": "Timeout (300s)"})
+                results.append({"label": step_label, "ok": False, "error": f"Timeout ({step_timeout}s)"})
             except Exception as e:
                 results.append({"label": step_label, "ok": False, "error": str(e)[:120]})
     except Exception as e:
