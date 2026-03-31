@@ -14,6 +14,8 @@ OBUMA_BASE_URL = "https://api-g1.obuma.cl/v1.0"
 TZ = "America/Santiago"
 DASHBOARD_USER = "gabriel"
 DASHBOARD_PASSWORD = "vlsur2026"
+EMAIL_FROM = "reportes@autoreportes.cl"
+EMAIL_FROM_NAME = "BI Platform - VLSur"
 
 [userenv.production]
 REPL_DEPLOYMENT = "1"
