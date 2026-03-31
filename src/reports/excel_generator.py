@@ -318,9 +318,19 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
 
     cartera_db_ids = set(cli.id for _, cli in cartera_clients) if cartera_clients else set()
 
+    excluded_db_ids = set()
+    inactive_entries = db.query(VendedorCartera).filter(
+        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+        VendedorCartera.activo == False
+    ).all()
+    for ie in inactive_entries:
+        excluded_db_ids.add(ie.cliente_id)
+
     for v in ventas:
         ckey = None
         if v.cliente_id:
+            if v.cliente_id in excluded_db_ids:
+                continue
             if v.cliente_id not in cartera_db_ids:
                 cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
                 if cliente:
