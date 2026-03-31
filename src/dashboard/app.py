@@ -1069,7 +1069,8 @@ elif page == "Vendedores":
                     VentaHistorico.vendedor_id == vid,
                     extract('year', VentaHistorico.fecha) == rend_anio,
                     extract('month', VentaHistorico.fecha) == rend_mes,
-                    VentaHistorico.anulada == False
+                    VentaHistorico.anulada == False,
+                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
                 ).scalar() or 0
 
                 cobertura_pct = (clientes_atendidos / total_cartera_count * 100) if total_cartera_count > 0 else 0
