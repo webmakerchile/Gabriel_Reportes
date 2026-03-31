@@ -316,9 +316,19 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
         if ckey not in client_info:
             client_info[ckey] = {'rut': cli.rut or '', 'nombre': cli.nombre or ''}
 
+    cartera_db_ids = set(cli.id for _, cli in cartera_clients) if cartera_clients else set()
+
     for v in ventas:
         ckey = None
         if v.cliente_id:
+            if v.cliente_id not in cartera_db_ids:
+                cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
+                if cliente:
+                    dj = cliente.data_json if isinstance(cliente.data_json, dict) else {}
+                    cli_vendedor = str(dj.get('rel_usuario_id', ''))
+                    if cli_vendedor != str(vendedor_obuma_id):
+                        continue
+                    cartera_db_ids.add(v.cliente_id)
             ckey = f"db_{v.cliente_id}"
             if ckey not in client_info:
                 cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
@@ -337,6 +347,10 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
                 if ckey not in client_info:
                     cliente = db.query(ClienteFinal).filter(ClienteFinal.obuma_id == rel_id).first()
                     if cliente:
+                        dj = cliente.data_json if isinstance(cliente.data_json, dict) else {}
+                        cli_vendedor = str(dj.get('rel_usuario_id', ''))
+                        if cli_vendedor != str(vendedor_obuma_id):
+                            continue
                         client_info[ckey] = {'rut': cliente.rut or '', 'nombre': cliente.nombre or ''}
                     else:
                         client_info[ckey] = {'rut': f'ID-{rel_id}', 'nombre': detalle.get('cliente_razon_social', f'Cliente {rel_id}')}
