@@ -357,10 +357,10 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
     for cid in all_client_keys:
         monthly = client_data.get(cid, defaultdict(float))
         info = client_info.get(cid, {'rut': '', 'nombre': ''})
-        month_values = [monthly.get(m, 0) if m in active_months else 0 for m in range(1, 13)]
+        month_values = [max(monthly.get(m, 0), 0) if m in active_months else 0 for m in range(1, 13)]
         total = sum(month_values)
         meses_con_venta = sum(1 for i, v in enumerate(month_values) if v > 0 and (i + 1) in active_months)
-        ventas_ultimos_3 = sum(monthly.get(m, 0) for m in last_3_months)
+        ventas_ultimos_3 = max(sum(max(monthly.get(m, 0), 0) for m in last_3_months), 0)
 
         rows.append({
             'rut': info['rut'],
