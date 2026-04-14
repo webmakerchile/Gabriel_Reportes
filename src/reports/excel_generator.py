@@ -407,10 +407,32 @@ def generate_vendedor_report(
     for ie in inactive_entries:
         excluded_db_ids.add(ie.cliente_id)
 
+    reassigned_entries = (
+        db.query(VendedorCartera)
+        .filter(
+            VendedorCartera.empleado_obuma_id != vendedor_obuma_id,
+            VendedorCartera.activo == True,
+        )
+        .all()
+    )
+    reassigned_db_ids = set(re.cliente_id for re in reassigned_entries)
+
+    def _parse_data_json(raw):
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {}
+
     for v in ventas:
         ckey = None
         if v.cliente_id:
             if v.cliente_id in excluded_db_ids:
+                continue
+            if v.cliente_id in reassigned_db_ids:
                 continue
             if v.cliente_id not in cartera_db_ids:
                 cliente = (
@@ -419,9 +441,7 @@ def generate_vendedor_report(
                     .first()
                 )
                 if cliente:
-                    dj = (
-                        cliente.data_json if isinstance(cliente.data_json, dict) else {}
-                    )
+                    dj = _parse_data_json(cliente.data_json)
                     cli_vendedor = str(dj.get("rel_usuario_id", ""))
                     if cli_vendedor != str(vendedor_obuma_id):
                         continue
@@ -455,11 +475,9 @@ def generate_vendedor_report(
                         .first()
                     )
                     if cliente:
-                        dj = (
-                            cliente.data_json
-                            if isinstance(cliente.data_json, dict)
-                            else {}
-                        )
+                        if cliente.id in excluded_db_ids or cliente.id in reassigned_db_ids:
+                            continue
+                        dj = _parse_data_json(cliente.data_json)
                         cli_vendedor = str(dj.get("rel_usuario_id", ""))
                         if cli_vendedor != str(vendedor_obuma_id):
                             continue
