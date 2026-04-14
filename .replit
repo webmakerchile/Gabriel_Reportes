@@ -12,10 +12,12 @@ packages = ["glibcLocales", "nginx"]
 OBUMA_API_KEY = "ff5bfe7710dd17ac298f60bd469b7b9b"
 OBUMA_BASE_URL = "https://api-g1.obuma.cl/v1.0"
 TZ = "America/Santiago"
-DASHBOARD_USER = "gabriel"
-DASHBOARD_PASSWORD = "vlsur2026"
+DASHBOARD_USER = "gabrielhoyos"
+DASHBOARD_PASSWORD = "bmRNkjph_kbG7Kn"
 EMAIL_FROM = "reportes@autoreportes.cl"
 EMAIL_FROM_NAME = "BI Platform - VLSur"
+ADMIN_USER = "webmakerchile@gmail.com"
+ADMIN_PASSWORD = "peseta832"
 
 [userenv.production]
 REPL_DEPLOYMENT = "1"

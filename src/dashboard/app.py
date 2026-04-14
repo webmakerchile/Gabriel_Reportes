@@ -44,17 +44,36 @@ st.set_page_config(
 )
 
 # ── LOGIN ──────────────────────────────────────────────────────────────────
-_VALID_USER = os.environ.get("DASHBOARD_USER", "gabriel")
-_VALID_PASS = os.environ.get("DASHBOARD_PASSWORD", "vlsur2026")
 import hashlib as _hashlib
-_AUTH_TOKEN = _hashlib.sha256(f"{_VALID_USER}:{_VALID_PASS}:bi_platform_2026".encode()).hexdigest()[:24]
+
+_USERS = {}
+_u1 = os.environ.get("DASHBOARD_USER", "")
+_p1 = os.environ.get("DASHBOARD_PASSWORD", "")
+if _u1 and _p1:
+    _USERS[_u1] = {"password": _p1, "role": "user"}
+_u2 = os.environ.get("ADMIN_USER", "")
+_p2 = os.environ.get("ADMIN_PASSWORD", "")
+if _u2 and _p2:
+    _USERS[_u2] = {"password": _p2, "role": "admin"}
+
+_AUTH_TOKENS = {}
+for _u, _info in _USERS.items():
+    _tok = _hashlib.sha256(f"{_u}:{_info['password']}:bi_platform_2026".encode()).hexdigest()[:24]
+    _AUTH_TOKENS[_tok] = {"user": _u, "role": _info["role"]}
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None
+if "user_name" not in st.session_state:
+    st.session_state.user_name = None
 
 if not st.session_state.authenticated:
-    if st.query_params.get("auth") == _AUTH_TOKEN:
+    _param_token = st.query_params.get("auth")
+    if _param_token and _param_token in _AUTH_TOKENS:
         st.session_state.authenticated = True
+        st.session_state.user_role = _AUTH_TOKENS[_param_token]["role"]
+        st.session_state.user_name = _AUTH_TOKENS[_param_token]["user"]
         st.rerun()
 
 if not st.session_state.authenticated:
@@ -83,9 +102,13 @@ if not st.session_state.authenticated:
             submitted = st.form_submit_button("Ingresar", use_container_width=True, type="primary")
 
         if submitted:
-            if user_input.strip() == _VALID_USER and pass_input == _VALID_PASS:
+            _matched = _USERS.get(user_input.strip())
+            if _matched and pass_input == _matched["password"]:
+                _tok = _hashlib.sha256(f"{user_input.strip()}:{pass_input}:bi_platform_2026".encode()).hexdigest()[:24]
                 st.session_state.authenticated = True
-                st.query_params["auth"] = _AUTH_TOKEN
+                st.session_state.user_role = _matched["role"]
+                st.session_state.user_name = user_input.strip()
+                st.query_params["auth"] = _tok
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
@@ -529,6 +552,8 @@ st.sidebar.markdown("---")
 st.sidebar.caption("v2.0 | Powered by Obuma ERP")
 if st.sidebar.button("🔒 Cerrar Sesión", use_container_width=True):
     st.session_state.authenticated = False
+    st.session_state.user_role = None
+    st.session_state.user_name = None
     st.query_params.clear()
     st.rerun()
 

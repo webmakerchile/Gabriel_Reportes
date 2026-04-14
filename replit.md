@@ -181,8 +181,12 @@ reports/                    # Directorio de reportes generados
 - `OBUMA_BASE_URL` - Base URL for Obuma API (https://api.obuma.cl/v1.0)
 - `TZ` - Timezone (America/Santiago)
 - `RESEND_API_KEY` - API key for Resend email service (primary email provider)
-- `EMAIL_FROM` - From address (default: onboarding@resend.dev; set custom domain once verified in Resend)
+- `EMAIL_FROM` - From address (reportes@autoreportes.cl - dominio verificado en Resend)
 - `EMAIL_FROM_NAME` - From name (default: BI Platform - VLSur)
+- `DASHBOARD_USER` - Username for client login (gabrielhoyos)
+- `DASHBOARD_PASSWORD` - Password for client login (secret)
+- `ADMIN_USER` - Username for super admin login (webmakerchile@gmail.com)
+- `ADMIN_PASSWORD` - Password for super admin login (secret)
 
 ## Running
 - `python main.py` starts both FastAPI (port 8000) and Streamlit (port 5000)
