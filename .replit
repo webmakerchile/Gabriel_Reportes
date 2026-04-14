@@ -16,8 +16,6 @@ DASHBOARD_USER = "gabrielhoyos"
 EMAIL_FROM = "reportes@autoreportes.cl"
 EMAIL_FROM_NAME = "BI Platform - VLSur"
 ADMIN_USER = "webmakerchile@gmail.com"
-DASHBOARD_PASSWORD = "AhWxILay21t0uAvN"
-ADMIN_PASSWORD = "CNBvA68KITpymJr9"
 
 [userenv.production]
 REPL_DEPLOYMENT = "1"
