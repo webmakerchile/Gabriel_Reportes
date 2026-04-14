@@ -8,36 +8,62 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, distinct, case as sql_case
-from src.models.models import VentaHistorico, ClienteFinal, Empleado, ReporteGenerado, VendedorCartera
+from src.models.models import (
+    VentaHistorico,
+    ClienteFinal,
+    Empleado,
+    ReporteGenerado,
+    VendedorCartera,
+)
 
 logger = logging.getLogger(__name__)
 
 HEADER_FONT = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
 HEADER_FILL = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
 HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
-CURRENCY_FORMAT = '#,##0'
-PERCENT_FORMAT = '0.00%'
+CURRENCY_FORMAT = "#,##0"
+PERCENT_FORMAT = "0.00%"
 THIN_BORDER = Border(
-    left=Side(style='thin'),
-    right=Side(style='thin'),
-    top=Side(style='thin'),
-    bottom=Side(style='thin')
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin"),
 )
 TITLE_FONT = Font(name="Calibri", bold=True, size=14, color="2F5496")
 SUBTITLE_FONT = Font(name="Calibri", bold=True, size=11, color="404040")
 
-YELLOW_FILL = PatternFill(start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid")
-GREEN_FILL = PatternFill(start_color="FF92D050", end_color="FF92D050", fill_type="solid")
+YELLOW_FILL = PatternFill(
+    start_color="FFFFFF00", end_color="FFFFFF00", fill_type="solid"
+)
+GREEN_FILL = PatternFill(
+    start_color="FF92D050", end_color="FF92D050", fill_type="solid"
+)
 RED_FILL = PatternFill(start_color="FFFF6B6B", end_color="FFFF6B6B", fill_type="solid")
-LIGHT_GREEN_FILL = PatternFill(start_color="FFE8F5E9", end_color="FFE8F5E9", fill_type="solid")
-LIGHT_RED_FILL = PatternFill(start_color="FFFFEBEE", end_color="FFFFEBEE", fill_type="solid")
+LIGHT_GREEN_FILL = PatternFill(
+    start_color="FFE8F5E9", end_color="FFE8F5E9", fill_type="solid"
+)
+LIGHT_RED_FILL = PatternFill(
+    start_color="FFFFEBEE", end_color="FFFFEBEE", fill_type="solid"
+)
 SEGMENTO_FONT = Font(name="Calibri", bold=True, size=11)
 
-MONTH_NAMES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
-               "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+MONTH_NAMES = [
+    "Ene",
+    "Feb",
+    "Mar",
+    "Abr",
+    "May",
+    "Jun",
+    "Jul",
+    "Ago",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dic",
+]
 
-BILLING_DOC_TYPES = ['Factura Electr.', 'Factura Exenta', 'Boleta Electr.']
-NC_DOC_TYPES = ['Nota Credito']
+BILLING_DOC_TYPES = ["Factura Electr.", "Factura Exenta", "Boleta Electr."]
+NC_DOC_TYPES = ["Nota Credito"]
 VALID_DOC_TYPES = BILLING_DOC_TYPES + NC_DOC_TYPES
 
 
@@ -106,12 +132,15 @@ def _resolve_date_range(date_from, date_to):
 
 
 def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to):
-    cartera_entries = db.query(VendedorCartera, ClienteFinal).join(
-        ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
-    ).filter(
-        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
-        VendedorCartera.activo == True
-    ).all()
+    cartera_entries = (
+        db.query(VendedorCartera, ClienteFinal)
+        .join(ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id)
+        .filter(
+            VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+            VendedorCartera.activo == True,
+        )
+        .all()
+    )
 
     if not cartera_entries:
         return
@@ -120,74 +149,103 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
     no_compraron = []
 
     for vc, cli in cartera_entries:
-        ventas_result = db.query(
-            func.sum(
-                sql_case(
-                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES), -VentaHistorico.subtotal),
-                    else_=VentaHistorico.subtotal
-                )
-            ).label("total_ventas"),
-            func.count(VentaHistorico.id).label("num_docs")
-        ).filter(
-            VentaHistorico.cliente_id == cli.id,
-            VentaHistorico.vendedor_id == vendedor_obuma_id,
-            VentaHistorico.anulada == False,
-            func.date(VentaHistorico.fecha) >= date_from,
-            func.date(VentaHistorico.fecha) <= date_to,
-            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
-        ).first()
+        ventas_result = (
+            db.query(
+                func.sum(
+                    sql_case(
+                        (
+                            VentaHistorico.tipo_documento.in_(NC_DOC_TYPES),
+                            -VentaHistorico.subtotal,
+                        ),
+                        else_=VentaHistorico.subtotal,
+                    )
+                ).label("total_ventas"),
+                func.count(VentaHistorico.id).label("num_docs"),
+            )
+            .filter(
+                VentaHistorico.cliente_id == cli.id,
+                VentaHistorico.vendedor_id == vendedor_obuma_id,
+                VentaHistorico.anulada == False,
+                func.date(VentaHistorico.fecha) >= date_from,
+                func.date(VentaHistorico.fecha) <= date_to,
+                VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES),
+            )
+            .first()
+        )
 
         total_ventas = ventas_result.total_ventas or 0
         num_docs = ventas_result.num_docs or 0
 
         if num_docs > 0:
-            compraron.append({
-                'nombre': cli.nombre or '',
-                'rut': cli.rut or '',
-                'total_ventas': total_ventas,
-                'num_docs': num_docs,
-            })
+            compraron.append(
+                {
+                    "nombre": cli.nombre or "",
+                    "rut": cli.rut or "",
+                    "total_ventas": total_ventas,
+                    "num_docs": num_docs,
+                }
+            )
         else:
-            ultima_compra = db.query(func.max(VentaHistorico.fecha)).filter(
-                VentaHistorico.cliente_id == cli.id,
-                VentaHistorico.vendedor_id == vendedor_obuma_id,
-                VentaHistorico.anulada == False
-            ).scalar()
+            ultima_compra = (
+                db.query(func.max(VentaHistorico.fecha))
+                .filter(
+                    VentaHistorico.cliente_id == cli.id,
+                    VentaHistorico.vendedor_id == vendedor_obuma_id,
+                    VentaHistorico.anulada == False,
+                )
+                .scalar()
+            )
             dias_sin = None
             ultima_str = "Sin registro"
             if ultima_compra:
-                if hasattr(ultima_compra, 'date'):
+                if hasattr(ultima_compra, "date"):
                     ultima_date = ultima_compra.date()
                 else:
                     ultima_date = ultima_compra
                 dias_sin = (date.today() - ultima_date).days
                 ultima_str = str(ultima_date)
 
-            no_compraron.append({
-                'nombre': cli.nombre or '',
-                'rut': cli.rut or '',
-                'ultima_compra': ultima_str,
-                'dias_sin_comprar': dias_sin,
-            })
+            no_compraron.append(
+                {
+                    "nombre": cli.nombre or "",
+                    "rut": cli.rut or "",
+                    "ultima_compra": ultima_str,
+                    "dias_sin_comprar": dias_sin,
+                }
+            )
 
-    compraron.sort(key=lambda x: x['total_ventas'], reverse=True)
-    no_compraron.sort(key=lambda x: (x['dias_sin_comprar'] is None, -(x['dias_sin_comprar'] or 0)))
+    compraron.sort(key=lambda x: x["total_ventas"], reverse=True)
+    no_compraron.sort(
+        key=lambda x: (x["dias_sin_comprar"] is None, -(x["dias_sin_comprar"] or 0))
+    )
 
     total_cartera = len(cartera_entries)
     total_compraron = len(compraron)
     total_no_compraron = len(no_compraron)
     cobertura = (total_compraron / total_cartera * 100) if total_cartera > 0 else 0
 
-    GREEN_HEADER = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
-    RED_HEADER = PatternFill(start_color="EF4444", end_color="EF4444", fill_type="solid")
-    BLUE_HEADER = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
+    GREEN_HEADER = PatternFill(
+        start_color="10B981", end_color="10B981", fill_type="solid"
+    )
+    RED_HEADER = PatternFill(
+        start_color="EF4444", end_color="EF4444", fill_type="solid"
+    )
+    BLUE_HEADER = PatternFill(
+        start_color="3B82F6", end_color="3B82F6", fill_type="solid"
+    )
 
     ws = wb.create_sheet("Cruce Cartera vs Ventas")
 
-    ws.cell(row=1, column=1, value=f"Cruce Cartera vs Ventas - {empleado.nombre}").font = TITLE_FONT
-    ws.merge_cells('A1:F1')
-    ws.cell(row=2, column=1, value=f"Periodo: {date_from.strftime('%d/%m/%Y')} - {date_to.strftime('%d/%m/%Y')}").font = SUBTITLE_FONT
-    ws.merge_cells('A2:F2')
+    ws.cell(
+        row=1, column=1, value=f"Cruce Cartera vs Ventas - {empleado.nombre}"
+    ).font = TITLE_FONT
+    ws.merge_cells("A1:F1")
+    ws.cell(
+        row=2,
+        column=1,
+        value=f"Periodo: {date_from.strftime('%d/%m/%Y')} - {date_to.strftime('%d/%m/%Y')}",
+    ).font = SUBTITLE_FONT
+    ws.merge_cells("A2:F2")
 
     ws.cell(row=4, column=1, value="Total Cartera")
     ws.cell(row=4, column=2, value=total_cartera)
@@ -205,8 +263,10 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
     ws.cell(row=6, column=2).fill = LIGHT_RED_FILL
 
     row = 9
-    ws.cell(row=row, column=1, value=f"CLIENTES QUE COMPRARON ({total_compraron})").font = Font(bold=True, size=12, color="10B981")
-    ws.merge_cells(f'A{row}:D{row}')
+    ws.cell(
+        row=row, column=1, value=f"CLIENTES QUE COMPRARON ({total_compraron})"
+    ).font = Font(bold=True, size=12, color="10B981")
+    ws.merge_cells(f"A{row}:D{row}")
     row += 1
 
     comp_headers = ["N°", "RUT", "Razon Social", "Total Ventas", "Documentos"]
@@ -220,22 +280,24 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
 
     for idx, c in enumerate(compraron, 1):
         ws.cell(row=row, column=1, value=idx).border = THIN_BORDER
-        ws.cell(row=row, column=2, value=c['rut']).border = THIN_BORDER
-        ws.cell(row=row, column=3, value=c['nombre']).border = THIN_BORDER
-        cell = ws.cell(row=row, column=4, value=c['total_ventas'])
+        ws.cell(row=row, column=2, value=c["rut"]).border = THIN_BORDER
+        ws.cell(row=row, column=3, value=c["nombre"]).border = THIN_BORDER
+        cell = ws.cell(row=row, column=4, value=c["total_ventas"])
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
-        ws.cell(row=row, column=5, value=c['num_docs']).border = THIN_BORDER
-        row_fill = LIGHT_RED_FILL if c['total_ventas'] < 0 else LIGHT_GREEN_FILL
+        ws.cell(row=row, column=5, value=c["num_docs"]).border = THIN_BORDER
+        row_fill = LIGHT_RED_FILL if c["total_ventas"] < 0 else LIGHT_GREEN_FILL
         for col in range(1, 6):
             ws.cell(row=row, column=col).fill = row_fill
-        if c['total_ventas'] < 0:
+        if c["total_ventas"] < 0:
             cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
         row += 1
 
     row += 1
-    ws.cell(row=row, column=1, value=f"CLIENTES QUE NO COMPRARON ({total_no_compraron})").font = Font(bold=True, size=12, color="EF4444")
-    ws.merge_cells(f'A{row}:D{row}')
+    ws.cell(
+        row=row, column=1, value=f"CLIENTES QUE NO COMPRARON ({total_no_compraron})"
+    ).font = Font(bold=True, size=12, color="EF4444")
+    ws.merge_cells(f"A{row}:D{row}")
     row += 1
 
     no_headers = ["N°", "RUT", "Razon Social", "Ultima Compra", "Dias sin Comprar"]
@@ -249,11 +311,13 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
 
     for idx, c in enumerate(no_compraron, 1):
         ws.cell(row=row, column=1, value=idx).border = THIN_BORDER
-        ws.cell(row=row, column=2, value=c['rut']).border = THIN_BORDER
-        ws.cell(row=row, column=3, value=c['nombre']).border = THIN_BORDER
-        ws.cell(row=row, column=4, value=c['ultima_compra']).border = THIN_BORDER
-        dias = c['dias_sin_comprar']
-        cell_dias = ws.cell(row=row, column=5, value=dias if dias is not None else "Sin registro")
+        ws.cell(row=row, column=2, value=c["rut"]).border = THIN_BORDER
+        ws.cell(row=row, column=3, value=c["nombre"]).border = THIN_BORDER
+        ws.cell(row=row, column=4, value=c["ultima_compra"]).border = THIN_BORDER
+        dias = c["dias_sin_comprar"]
+        cell_dias = ws.cell(
+            row=row, column=5, value=dias if dias is not None else "Sin registro"
+        )
         cell_dias.border = THIN_BORDER
         for col in range(1, 6):
             ws.cell(row=row, column=col).fill = LIGHT_RED_FILL
@@ -261,14 +325,16 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
 
     _auto_width(ws)
 
-    ws.column_dimensions['A'].width = 6
-    ws.column_dimensions['B'].width = 16
-    ws.column_dimensions['C'].width = 42
-    ws.column_dimensions['D'].width = 18
-    ws.column_dimensions['E'].width = 18
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 42
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 18
 
 
-def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: date = None, date_to: date = None) -> str:
+def generate_vendedor_report(
+    db: Session, vendedor_obuma_id: str, date_from: date = None, date_to: date = None
+) -> str:
     date_from, date_to, custom_range = _resolve_date_range(date_from, date_to)
 
     reference_date = date_to if date_to else date.today()
@@ -279,23 +345,32 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
         logger.warning(f"Empleado not found for obuma_id: {vendedor_obuma_id}")
         return None
 
-    ventas = db.query(VentaHistorico).filter(
-        VentaHistorico.vendedor_id == vendedor_obuma_id,
-        VentaHistorico.anulada != True,
-        func.date(VentaHistorico.fecha) >= date_from,
-        func.date(VentaHistorico.fecha) <= date_to,
-        VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
-    ).all()
+    ventas = (
+        db.query(VentaHistorico)
+        .filter(
+            VentaHistorico.vendedor_id == vendedor_obuma_id,
+            VentaHistorico.anulada != True,
+            func.date(VentaHistorico.fecha) >= date_from,
+            func.date(VentaHistorico.fecha) <= date_to,
+            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES),
+        )
+        .all()
+    )
 
-    cartera_clients = db.query(VendedorCartera, ClienteFinal).join(
-        ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
-    ).filter(
-        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
-        VendedorCartera.activo == True
-    ).all()
+    cartera_clients = (
+        db.query(VendedorCartera, ClienteFinal)
+        .join(ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id)
+        .filter(
+            VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+            VendedorCartera.activo == True,
+        )
+        .all()
+    )
 
     if not ventas and not cartera_clients:
-        logger.info(f"No sales or cartera found for vendedor {empleado.nombre} ({vendedor_obuma_id}) in range {date_from} to {date_to}")
+        logger.info(
+            f"No sales or cartera found for vendedor {empleado.nombre} ({vendedor_obuma_id}) in range {date_from} to {date_to}"
+        )
         return None
 
     active_months = set()
@@ -314,15 +389,21 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
     for vc, cli in cartera_clients:
         ckey = f"db_{cli.id}"
         if ckey not in client_info:
-            client_info[ckey] = {'rut': cli.rut or '', 'nombre': cli.nombre or ''}
+            client_info[ckey] = {"rut": cli.rut or "", "nombre": cli.nombre or ""}
 
-    cartera_db_ids = set(cli.id for _, cli in cartera_clients) if cartera_clients else set()
+    cartera_db_ids = (
+        set(cli.id for _, cli in cartera_clients) if cartera_clients else set()
+    )
 
     excluded_db_ids = set()
-    inactive_entries = db.query(VendedorCartera).filter(
-        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
-        VendedorCartera.activo == False
-    ).all()
+    inactive_entries = (
+        db.query(VendedorCartera)
+        .filter(
+            VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+            VendedorCartera.activo == False,
+        )
+        .all()
+    )
     for ie in inactive_entries:
         excluded_db_ids.add(ie.cliente_id)
 
@@ -332,38 +413,67 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
             if v.cliente_id in excluded_db_ids:
                 continue
             if v.cliente_id not in cartera_db_ids:
-                cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
+                cliente = (
+                    db.query(ClienteFinal)
+                    .filter(ClienteFinal.id == v.cliente_id)
+                    .first()
+                )
                 if cliente:
-                    dj = cliente.data_json if isinstance(cliente.data_json, dict) else {}
-                    cli_vendedor = str(dj.get('rel_usuario_id', ''))
+                    dj = (
+                        cliente.data_json if isinstance(cliente.data_json, dict) else {}
+                    )
+                    cli_vendedor = str(dj.get("rel_usuario_id", ""))
                     if cli_vendedor != str(vendedor_obuma_id):
                         continue
                     cartera_db_ids.add(v.cliente_id)
             ckey = f"db_{v.cliente_id}"
             if ckey not in client_info:
-                cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
+                cliente = (
+                    db.query(ClienteFinal)
+                    .filter(ClienteFinal.id == v.cliente_id)
+                    .first()
+                )
                 if cliente:
-                    client_info[ckey] = {'rut': cliente.rut or '', 'nombre': cliente.nombre or ''}
+                    client_info[ckey] = {
+                        "rut": cliente.rut or "",
+                        "nombre": cliente.nombre or "",
+                    }
                 else:
-                    client_info[ckey] = {'rut': '', 'nombre': ''}
+                    client_info[ckey] = {"rut": "", "nombre": ""}
         else:
             try:
                 detalle = json.loads(v.detalle) if v.detalle else {}
             except (json.JSONDecodeError, TypeError):
                 detalle = {}
-            rel_id = str(detalle.get('rel_cliente_id', '0'))
-            if rel_id and rel_id != '0':
+            rel_id = str(detalle.get("rel_cliente_id", "0"))
+            if rel_id and rel_id != "0":
                 ckey = f"obuma_{rel_id}"
                 if ckey not in client_info:
-                    cliente = db.query(ClienteFinal).filter(ClienteFinal.obuma_id == rel_id).first()
+                    cliente = (
+                        db.query(ClienteFinal)
+                        .filter(ClienteFinal.obuma_id == rel_id)
+                        .first()
+                    )
                     if cliente:
-                        dj = cliente.data_json if isinstance(cliente.data_json, dict) else {}
-                        cli_vendedor = str(dj.get('rel_usuario_id', ''))
+                        dj = (
+                            cliente.data_json
+                            if isinstance(cliente.data_json, dict)
+                            else {}
+                        )
+                        cli_vendedor = str(dj.get("rel_usuario_id", ""))
                         if cli_vendedor != str(vendedor_obuma_id):
                             continue
-                        client_info[ckey] = {'rut': cliente.rut or '', 'nombre': cliente.nombre or ''}
+                        client_info[ckey] = {
+                            "rut": cliente.rut or "",
+                            "nombre": cliente.nombre or "",
+                        }
                     else:
-                        client_info[ckey] = {'rut': f'ID-{rel_id}', 'nombre': detalle.get('cliente_razon_social', f'Cliente {rel_id}')}
+                        client_info[ckey] = {
+                            "rut": f"ID-{rel_id}",
+                            "nombre": detalle.get(
+                                "cliente_razon_social", f"Cliente {rel_id}"
+                            ),
+                        }
             else:
                 continue
 
@@ -380,44 +490,72 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
     rows = []
     for cid in all_client_keys:
         monthly = client_data.get(cid, defaultdict(float))
-        info = client_info.get(cid, {'rut': '', 'nombre': ''})
-        month_values = [max(monthly.get(m, 0), 0) if m in active_months else 0 for m in range(1, 13)]
+        info = client_info.get(cid, {"rut": "", "nombre": ""})
+        # FIX 4: No usar max(val, 0) — las Notas de Crédito generan valores negativos
+        # legítimos que deben reflejarse en el reporte para mostrar cifras reales.
+        month_values = [
+            monthly.get(m, 0) if m in active_months else 0 for m in range(1, 13)
+        ]
         total = sum(month_values)
-        meses_con_venta = sum(1 for i, v in enumerate(month_values) if v > 0 and (i + 1) in active_months)
-        ventas_ultimos_3 = max(sum(max(monthly.get(m, 0), 0) for m in last_3_months), 0)
+        meses_con_venta = sum(
+            1 for i, v in enumerate(month_values) if v > 0 and (i + 1) in active_months
+        )
+        ventas_ultimos_3 = sum(monthly.get(m, 0) for m in last_3_months)
 
-        rows.append({
-            'rut': info['rut'],
-            'nombre': info['nombre'],
-            'months': month_values,
-            'total': total,
-            'meses_con_venta': meses_con_venta,
-            'ventas_ultimos_3': ventas_ultimos_3,
-        })
+        rows.append(
+            {
+                "rut": info["rut"],
+                "nombre": info["nombre"],
+                "months": month_values,
+                "total": total,
+                "meses_con_venta": meses_con_venta,
+                "ventas_ultimos_3": ventas_ultimos_3,
+            }
+        )
 
-    rows.sort(key=lambda r: r['total'], reverse=True)
+    rows.sort(key=lambda r: r["total"], reverse=True)
 
-    grand_total = sum(r['total'] for r in rows)
+    grand_total = sum(r["total"] for r in rows)
 
     acumulado = 0
     for r in rows:
-        pct_venta = r['total'] / grand_total if grand_total > 0 else 0
+        pct_venta = r["total"] / grand_total if grand_total > 0 else 0
         acumulado += pct_venta
-        r['pct_venta'] = pct_venta
-        r['pct_acumulado'] = acumulado
-        r['segmento'] = _classify_segmento(acumulado)
-        r['nivel_riesgo'] = _classify_riesgo(r['meses_con_venta'], r['ventas_ultimos_3'])
+        r["pct_venta"] = pct_venta
+        r["pct_acumulado"] = acumulado
+        r["segmento"] = _classify_segmento(acumulado)
+        r["nivel_riesgo"] = _classify_riesgo(
+            r["meses_con_venta"], r["ventas_ultimos_3"]
+        )
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Reporte-Ventas-EvolucionPorClie"
 
     headers = [
-        "N°", "CLIENTE Rut", "CLIENTE Razon Social", "CLIENTE Tipo",
-        "Ene", "Feb", "Mar", "Abr", "May", "Jun",
-        "Jul", "Ago", "Sep", "Oct", "Nov", "Dic",
-        "TOTAL", "% Acumulado", "Segmento", "% de la venta",
-        "Meses con venta", "Ventas últimos 3 meses", "Nivel de Riesgo"
+        "N°",
+        "CLIENTE Rut",
+        "CLIENTE Razon Social",
+        "CLIENTE Tipo",
+        "Ene",
+        "Feb",
+        "Mar",
+        "Abr",
+        "May",
+        "Jun",
+        "Jul",
+        "Ago",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dic",
+        "TOTAL",
+        "% Acumulado",
+        "Segmento",
+        "% de la venta",
+        "Meses con venta",
+        "Ventas últimos 3 meses",
+        "Nivel de Riesgo",
     ]
 
     for i, h in enumerate(headers, 1):
@@ -427,12 +565,12 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
     for idx, r in enumerate(rows, 1):
         row_num = idx + 1
         ws.cell(row=row_num, column=1, value=idx).border = THIN_BORDER
-        ws.cell(row=row_num, column=2, value=r['rut']).border = THIN_BORDER
-        ws.cell(row=row_num, column=3, value=r['nombre']).border = THIN_BORDER
+        ws.cell(row=row_num, column=2, value=r["rut"]).border = THIN_BORDER
+        ws.cell(row=row_num, column=3, value=r["nombre"]).border = THIN_BORDER
         ws.cell(row=row_num, column=4, value="Distribuidor").border = THIN_BORDER
 
         for m in range(12):
-            val = r['months'][m]
+            val = r["months"][m]
             cell = ws.cell(row=row_num, column=5 + m, value=val)
             cell.number_format = CURRENCY_FORMAT
             cell.border = THIN_BORDER
@@ -442,7 +580,7 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
             elif val == 0:
                 cell.fill = YELLOW_FILL
 
-        total_val = r['total']
+        total_val = r["total"]
         cell = ws.cell(row=row_num, column=17, value=total_val)
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
@@ -450,22 +588,22 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
             cell.fill = LIGHT_RED_FILL
             cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
 
-        cell = ws.cell(row=row_num, column=18, value=r['pct_acumulado'])
+        cell = ws.cell(row=row_num, column=18, value=r["pct_acumulado"])
         cell.number_format = PERCENT_FORMAT
         cell.border = THIN_BORDER
 
-        cell = ws.cell(row=row_num, column=19, value=r['segmento'])
+        cell = ws.cell(row=row_num, column=19, value=r["segmento"])
         cell.fill = GREEN_FILL
         cell.font = SEGMENTO_FONT
         cell.border = THIN_BORDER
 
-        cell = ws.cell(row=row_num, column=20, value=r['pct_venta'])
+        cell = ws.cell(row=row_num, column=20, value=r["pct_venta"])
         cell.number_format = PERCENT_FORMAT
         cell.border = THIN_BORDER
 
-        ws.cell(row=row_num, column=21, value=r['meses_con_venta']).border = THIN_BORDER
+        ws.cell(row=row_num, column=21, value=r["meses_con_venta"]).border = THIN_BORDER
 
-        ult3_val = r['ventas_ultimos_3']
+        ult3_val = r["ventas_ultimos_3"]
         cell = ws.cell(row=row_num, column=22, value=ult3_val)
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
@@ -475,14 +613,16 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
         elif ult3_val == 0:
             cell.fill = YELLOW_FILL
 
-        riesgo_val = r['nivel_riesgo']
+        riesgo_val = r["nivel_riesgo"]
         riesgo_cell = ws.cell(row=row_num, column=23, value=riesgo_val)
         riesgo_cell.border = THIN_BORDER
         if riesgo_val == "ALTO":
             riesgo_cell.fill = RED_FILL
             riesgo_cell.font = Font(name="Calibri", size=11, color="FFFFFF", bold=True)
         elif riesgo_val == "MEDIO":
-            riesgo_cell.fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+            riesgo_cell.fill = PatternFill(
+                start_color="FFF3CD", end_color="FFF3CD", fill_type="solid"
+            )
             riesgo_cell.font = Font(name="Calibri", size=11, color="856404", bold=True)
         elif riesgo_val == "BAJO":
             riesgo_cell.fill = LIGHT_GREEN_FILL
@@ -514,15 +654,21 @@ def generate_vendedor_report(db: Session, vendedor_obuma_id: str, date_from: dat
     return filepath
 
 
-def generate_all_vendedor_reports(db: Session, date_from: date = None, date_to: date = None) -> list:
+def generate_all_vendedor_reports(
+    db: Session, date_from: date = None, date_to: date = None
+) -> list:
     resolved_from, resolved_to, _ = _resolve_date_range(date_from, date_to)
 
-    vendedor_ids = db.query(distinct(VentaHistorico.vendedor_id)).filter(
-        VentaHistorico.vendedor_id != None,
-        VentaHistorico.anulada != True,
-        VentaHistorico.fecha >= resolved_from,
-        VentaHistorico.fecha <= resolved_to
-    ).all()
+    vendedor_ids = (
+        db.query(distinct(VentaHistorico.vendedor_id))
+        .filter(
+            VentaHistorico.vendedor_id != None,
+            VentaHistorico.anulada != True,
+            VentaHistorico.fecha >= resolved_from,
+            VentaHistorico.fecha <= resolved_to,
+        )
+        .all()
+    )
 
     vendedor_ids = [vid[0] for vid in vendedor_ids if vid[0]]
 
@@ -535,7 +681,9 @@ def generate_all_vendedor_reports(db: Session, date_from: date = None, date_to: 
         except Exception as e:
             logger.error(f"Error generating report for vendedor {vid}: {e}")
 
-    logger.info(f"Generated {len(filepaths)} vendedor reports for range {resolved_from} to {resolved_to}")
+    logger.info(
+        f"Generated {len(filepaths)} vendedor reports for range {resolved_from} to {resolved_to}"
+    )
     return filepaths
 
 
@@ -552,8 +700,14 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
     ws = wb.active
     ws.title = "Resumen Consolidado"
 
-    ws.cell(row=1, column=1, value="Reporte Consolidado de Vendedores").font = TITLE_FONT
-    ws.cell(row=2, column=1, value=f"Fecha: {report_date.strftime('%d/%m/%Y')} - Año: {current_year}").font = SUBTITLE_FONT
+    ws.cell(
+        row=1, column=1, value="Reporte Consolidado de Vendedores"
+    ).font = TITLE_FONT
+    ws.cell(
+        row=2,
+        column=1,
+        value=f"Fecha: {report_date.strftime('%d/%m/%Y')} - Año: {current_year}",
+    ).font = SUBTITLE_FONT
     ws.merge_cells("A1:D1")
     ws.merge_cells("A2:D2")
 
@@ -562,12 +716,16 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
         ws.cell(row=4, column=i, value=h)
     _style_header(ws, 4, len(headers))
 
-    vendedor_ids = db.query(distinct(VentaHistorico.vendedor_id)).filter(
-        VentaHistorico.vendedor_id != None,
-        VentaHistorico.anulada != True,
-        func.date(VentaHistorico.fecha) >= date_from,
-        func.date(VentaHistorico.fecha) <= date_to
-    ).all()
+    vendedor_ids = (
+        db.query(distinct(VentaHistorico.vendedor_id))
+        .filter(
+            VentaHistorico.vendedor_id != None,
+            VentaHistorico.anulada != True,
+            func.date(VentaHistorico.fecha) >= date_from,
+            func.date(VentaHistorico.fecha) <= date_to,
+        )
+        .all()
+    )
     vendedor_ids = [vid[0] for vid in vendedor_ids if vid[0]]
 
     row = 5
@@ -577,27 +735,34 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
         if not empleado:
             continue
 
-        stats = db.query(
-            func.count(distinct(VentaHistorico.cliente_id)),
-            func.sum(
-                sql_case(
-                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES), -VentaHistorico.subtotal),
-                    else_=VentaHistorico.subtotal
-                )
+        stats = (
+            db.query(
+                func.count(distinct(VentaHistorico.cliente_id)),
+                func.sum(
+                    sql_case(
+                        (
+                            VentaHistorico.tipo_documento.in_(NC_DOC_TYPES),
+                            -VentaHistorico.subtotal,
+                        ),
+                        else_=VentaHistorico.subtotal,
+                    )
+                ),
             )
-        ).filter(
-            VentaHistorico.vendedor_id == vid,
-            VentaHistorico.anulada != True,
-            func.date(VentaHistorico.fecha) >= date_from,
-            func.date(VentaHistorico.fecha) <= date_to,
-            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES)
-        ).first()
+            .filter(
+                VentaHistorico.vendedor_id == vid,
+                VentaHistorico.anulada != True,
+                func.date(VentaHistorico.fecha) >= date_from,
+                func.date(VentaHistorico.fecha) <= date_to,
+                VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES),
+            )
+            .first()
+        )
 
         num_clientes = stats[0] or 0
         total_neto = stats[1] or 0
 
-        ws.cell(row=row, column=1, value=empleado.nombre or '').border = THIN_BORDER
-        ws.cell(row=row, column=2, value=empleado.rut or '').border = THIN_BORDER
+        ws.cell(row=row, column=1, value=empleado.nombre or "").border = THIN_BORDER
+        ws.cell(row=row, column=2, value=empleado.rut or "").border = THIN_BORDER
         ws.cell(row=row, column=3, value=num_clientes).border = THIN_BORDER
         cell = ws.cell(row=row, column=4, value=total_neto)
         cell.number_format = CURRENCY_FORMAT
@@ -630,5 +795,7 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
     db.add(reporte)
     db.commit()
 
-    logger.info(f"Daily consolidated report generated: {filepath} with {len(filepaths)} vendedor reports")
+    logger.info(
+        f"Daily consolidated report generated: {filepath} with {len(filepaths)} vendedor reports"
+    )
     return filepath
