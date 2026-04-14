@@ -1,0 +1,249 @@
+PROMPT MAESTRO — Corrección de Reportes BI Platform Gabriel Hoyos
+Eres un desarrollador senior Python trabajando en una plataforma de Business Intelligence construida con FastAPI + Streamlit + PostgreSQL + APScheduler. La plataforma sincroniza datos desde el ERP Obuma y genera reportes Excel por vendedor.
+CONTEXTO DEL PROYECTO
+
+Backend: FastAPI (puerto 8000) con scheduler APScheduler
+Frontend: Streamlit (puerto 5000)
+Base de datos: PostgreSQL
+ETL: Sincronización con API Obuma (23 endpoints)
+Reportes: openpyxl genera Excel por vendedor con evolución mensual, segmentación ABC, nivel de riesgo
+Email: Resend (dominio autoreportes.cl)
+5 vendedores trackeados: Gabriel Hoyos (28856), Jhonatan Ruiz (28886), Ernesto Quintiliani (28887), Pablo Pinto (28891), Jesus Gonzalez (28892)
+
+BUGS A CORREGIR (en este orden exacto)
+Hay 6 bugs identificados. Corrígelos uno por uno, en orden. Después de cada corrección, muéstrame el diff del cambio y explica brevemente qué resuelve. No avances al siguiente bug hasta confirmar que el anterior está correcto.
+
+BUG 1 — Scheduler duplicado al reiniciar FastAPI
+Archivo: src/scheduler.py → función start_scheduler()
+Problema: Cada vez que FastAPI se reinicia (crash + auto-restart en main.py), se crea una nueva instancia de BackgroundScheduler sin verificar si ya existe una corriendo. Esto genera ejecuciones dobles de sync y reportes.
+Solución: Implementar un patrón singleton con variable global _scheduler_instance. Antes de crear un nuevo scheduler, verificar si _scheduler_instance ya existe y está corriendo. Si sí, retornarlo sin crear otro.
+python# Agregar al inicio del archivo:
+_scheduler_instance = None
+
+# Modificar start_scheduler():
+def start_scheduler():
+    global _scheduler_instance
+    if _scheduler_instance is not None:
+        try:
+            if _scheduler_instance.running:
+                logger.info("Scheduler ya está corriendo, omitiendo reinicio.")
+                return _scheduler_instance
+        except Exception:
+            pass
+    # ... resto del código existente ...
+    _scheduler_instance = scheduler
+    return scheduler
+
+BUG 2 — Sync de items solo trae últimos 45 días
+Archivo: src/scheduler.py → función scheduled_sync_and_report()
+Problema: Línea fecha_desde = (today - timedelta(days=45)).strftime("%Y-%m-%d") hace que los items de ventas solo se sincronicen para los últimos 45 días. Pero el reporte Excel se genera para todo el año (enero a diciembre), así que los meses antiguos quedan con items desactualizados. Esto afecta la clasificación Maquinaria vs Repuestos.
+Solución: Cambiar fecha_desde para que comience desde el 1 de enero del año actual:
+python# ANTES:
+fecha_desde = (today - timedelta(days=45)).strftime("%Y-%m-%d")
+
+# DESPUÉS:
+fecha_desde = date(today.year, 1, 1).strftime("%Y-%m-%d")
+
+BUG 3 — generate_all_vendedor_reports sin fechas explícitas
+Archivo: src/scheduler.py → función scheduled_sync_and_report()
+Problema: La línea filepaths = generate_all_vendedor_reports(db) no pasa date_from ni date_to. Esto dispara _resolve_date_range(None, None) que usa enero 1 a diciembre 31, lo cual es inconsistente con el rango real de datos sincronizados.
+Solución: Pasar fechas explícitas (1 enero hasta hoy):
+python# ANTES:
+filepaths = generate_all_vendedor_reports(db)
+
+# DESPUÉS:
+date_from = date(today.year, 1, 1)
+date_to = today
+filepaths = generate_all_vendedor_reports(db, date_from, date_to)
+
+BUG 4 — max(val, 0) oculta Notas de Crédito en Excel
+Archivo: src/reports/excel_generator.py → función generate_vendedor_report(), aproximadamente línea 384
+Problema: El código max(monthly.get(m, 0), 0) fuerza todos los valores negativos a cero. Las Notas de Crédito se restan correctamente en la línea 374 (client_data[ckey][month] -= amount), pero luego max(..., 0) las borra al construir los totales. Esto infla las cifras de venta. Lo mismo ocurre con ventas_ultimos_3 que usa max(sum(max(..., 0)...), 0).
+Solución: Eliminar los max(..., 0):
+python# ANTES:
+month_values = [max(monthly.get(m, 0), 0) if m in active_months else 0 for m in range(1, 13)]
+total = sum(month_values)
+meses_con_venta = sum(1 for i, v in enumerate(month_values) if v > 0 and (i + 1) in active_months)
+ventas_ultimos_3 = max(sum(max(monthly.get(m, 0), 0) for m in last_3_months), 0)
+
+# DESPUÉS:
+month_values = [monthly.get(m, 0) if m in active_months else 0 for m in range(1, 13)]
+total = sum(month_values)
+meses_con_venta = sum(1 for i, v in enumerate(month_values) if v > 0 and (i + 1) in active_months)
+ventas_ultimos_3 = sum(monthly.get(m, 0) for m in last_3_months)
+
+BUG 5 — Sync diario NO envía emails
+Archivo: src/scheduler.py → función scheduled_sync_and_report()
+Problema: La función genera los Excel pero NUNCA llama a send_report_email. Los emails solo se envían desde process_scheduled_reports(), que requiere un ReporteProgramado activo en la base de datos. Si no hay reportes programados configurados, los emails no se envían nunca.
+Solución: Después de generate_all_vendedor_reports(), agregar una función _send_daily_report_emails() que:
+
+Verifica que email esté configurado con check_email_config()
+Busca destinatarios de ReporteProgramado activos (todos los emails únicos)
+Si no hay, usa variable de entorno REPORT_EMAIL_TO como fallback
+Envía los archivos generados con send_report_email()
+
+python# Agregar al final de scheduled_sync_and_report(), después de generar filepaths:
+if filepaths:
+    _send_daily_report_emails(db, filepaths, date_from, date_to)
+
+# Nueva función _send_daily_report_emails():
+def _send_daily_report_emails(db, filepaths, date_from, date_to):
+    try:
+        email_config = check_email_config()
+        if not email_config["configured"]:
+            logger.warning("Email no configurado. Reportes generados pero no enviados.")
+            return
+        from src.models.models import ReporteProgramado
+        schedules = db.query(ReporteProgramado).filter(ReporteProgramado.activo == True).all()
+        all_emails = set()
+        for sched in schedules:
+            if sched.emails_destino:
+                for e in sched.emails_destino.replace("\n", ",").split(","):
+                    e = e.strip()
+                    if e and "@" in e:
+                        all_emails.add(e)
+        if not all_emails:
+            import os
+            fallback = os.environ.get("REPORT_EMAIL_TO", "")
+            if fallback:
+                all_emails = {e.strip() for e in fallback.split(",") if e.strip()}
+        if not all_emails:
+            logger.warning("No hay destinatarios configurados para envío diario.")
+            return
+        date_range_str = f"{date_from.strftime('%d/%m/%Y')} - {date_to.strftime('%d/%m/%Y')}"
+        subject = f"Reportes Vendedores - {date_range_str}"
+        body = build_report_email_html("Todos los Vendedores", "Reporte Diario Automático", date_range_str, {
+            "Archivos generados": len(filepaths),
+            "Periodo": date_range_str,
+        })
+        result = send_report_email(list(all_emails), subject, body, filepaths)
+        if result["success"]:
+            logger.info(f"Reportes diarios enviados a: {list(all_emails)}")
+        else:
+            logger.error(f"Error enviando reportes: {result.get('error')}")
+    except Exception as e:
+        logger.error(f"Error en envío de emails diarios: {e}", exc_info=True)
+
+BUG 6 — Clientes no se "restan" del reporte cuando se reasignan o eliminan
+Archivo: src/reports/excel_generator.py → función generate_vendedor_report(), bloque que procesa ventas (aprox. líneas 321-368)
+Problema: Cuando Gabriel quita un cliente de un vendedor (desactiva en VendedorCartera) o lo reasigna a otro vendedor en Obuma, el cliente sigue apareciendo en el reporte del vendedor anterior. Esto pasa porque:
+
+La línea 332 (if v.cliente_id in excluded_db_ids: continue) excluye correctamente clientes desactivados.
+PERO la línea 334-341 tiene un bypass: si el cliente no está en cartera_db_ids, verifica data_json.rel_usuario_id y si coincide con el vendedor, lo RE-AGREGA al reporte. Esto ignora que el cliente fue desactivado previamente.
+Lo mismo ocurre en la rama else (líneas 357-364) para clientes sin cliente_id directo.
+
+Solución: Modificar la lógica para que:
+
+Antes de re-agregar un cliente por data_json, verificar si tiene un registro VendedorCartera con activo=False para ese vendedor. Si lo tiene, NO incluirlo.
+También verificar si el cliente fue reasignado (tiene VendedorCartera.activo=True con OTRO empleado_obuma_id).
+Aplicar la misma verificación en la rama else (clientes por obuma_id).
+
+El bloque corregido completo (reemplaza desde excluded_db_ids = set() hasta el final del for v in ventas):
+python    # Construir set de clientes excluidos
+    excluded_db_ids = set()
+    inactive_entries = db.query(VendedorCartera).filter(
+        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+        VendedorCartera.activo == False
+    ).all()
+    for ie in inactive_entries:
+        excluded_db_ids.add(ie.cliente_id)
+
+    # También excluir clientes reasignados a otro vendedor
+    reassigned_entries = db.query(VendedorCartera.cliente_id).filter(
+        VendedorCartera.empleado_obuma_id != vendedor_obuma_id,
+        VendedorCartera.activo == True,
+        VendedorCartera.cliente_id.in_([ie.cliente_id for ie in inactive_entries])
+    ).all() if inactive_entries else []
+    for (cid,) in reassigned_entries:
+        excluded_db_ids.add(cid)
+
+    for v in ventas:
+        ckey = None
+        if v.cliente_id:
+            if v.cliente_id in excluded_db_ids:
+                continue
+            if v.cliente_id not in cartera_db_ids:
+                cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
+                if cliente:
+                    try:
+                        dj = json.loads(cliente.data_json) if isinstance(cliente.data_json, str) else (cliente.data_json or {})
+                    except (json.JSONDecodeError, TypeError):
+                        dj = {}
+                    cli_vendedor = str(dj.get('rel_usuario_id', ''))
+                    if cli_vendedor != str(vendedor_obuma_id):
+                        continue
+                    # Verificar desactivación previa
+                    was_removed = db.query(VendedorCartera).filter(
+                        VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+                        VendedorCartera.cliente_id == v.cliente_id,
+                        VendedorCartera.activo == False
+                    ).first()
+                    if was_removed:
+                        excluded_db_ids.add(v.cliente_id)
+                        continue
+                    cartera_db_ids.add(v.cliente_id)
+                else:
+                    continue
+            ckey = f"db_{v.cliente_id}"
+            if ckey not in client_info:
+                cliente = db.query(ClienteFinal).filter(ClienteFinal.id == v.cliente_id).first()
+                if cliente:
+                    client_info[ckey] = {'rut': cliente.rut or '', 'nombre': cliente.nombre or ''}
+                else:
+                    client_info[ckey] = {'rut': '', 'nombre': ''}
+        else:
+            try:
+                detalle = json.loads(v.detalle) if v.detalle else {}
+            except (json.JSONDecodeError, TypeError):
+                detalle = {}
+            rel_id = str(detalle.get('rel_cliente_id', '0'))
+            if rel_id and rel_id != '0':
+                cliente = db.query(ClienteFinal).filter(ClienteFinal.obuma_id == rel_id).first()
+                if cliente and cliente.id in excluded_db_ids:
+                    continue
+                ckey = f"obuma_{rel_id}"
+                if ckey not in client_info:
+                    if cliente:
+                        try:
+                            dj = json.loads(cliente.data_json) if isinstance(cliente.data_json, str) else (cliente.data_json or {})
+                        except (json.JSONDecodeError, TypeError):
+                            dj = {}
+                        cli_vendedor = str(dj.get('rel_usuario_id', ''))
+                        if cli_vendedor != str(vendedor_obuma_id):
+                            continue
+                        was_removed = db.query(VendedorCartera).filter(
+                            VendedorCartera.empleado_obuma_id == vendedor_obuma_id,
+                            VendedorCartera.cliente_id == cliente.id,
+                            VendedorCartera.activo == False
+                        ).first()
+                        if was_removed:
+                            excluded_db_ids.add(cliente.id)
+                            continue
+                        client_info[ckey] = {'rut': cliente.rut or '', 'nombre': cliente.nombre or ''}
+                    else:
+                        client_info[ckey] = {'rut': f'ID-{rel_id}', 'nombre': detalle.get('cliente_razon_social', f'Cliente {rel_id}')}
+            else:
+                continue
+
+TAREA ADICIONAL — Cambio de contraseña
+Después de aplicar los 6 bugs, cambia la contraseña del dashboard. En las variables de entorno (Secrets en Replit), actualiza:
+
+DASHBOARD_PASSWORD: genera una contraseña segura de 16 caracteres (letras, números, símbolos)
+ADMIN_PASSWORD: genera otra contraseña segura diferente de 16 caracteres
+
+NO hardcodees contraseñas en el código. Solo en variables de entorno.
+
+VERIFICACIÓN FINAL
+Después de aplicar todos los cambios:
+
+Verifica que los 3 archivos modificados (scheduler.py, excel_generator.py, main.py) pasen validación de sintaxis Python con python -c "import ast; ast.parse(open('archivo.py').read()); print('OK')"
+Reinicia el servicio con python main.py
+Verifica en los logs que el scheduler se inicie UNA sola vez
+Ejecuta manualmente un reporte para un vendedor y verifica que los montos incluyan Notas de Crédito (valores negativos visibles) y que los clientes desactivados NO aparezcan
+
+ARCHIVOS A MODIFICAR
+Solo 3 archivos:
+
+src/scheduler.py → Bugs 1, 2, 3, 5
+src/reports/excel_generator.py → Bugs 4, 6
+main.py (raíz) → Mejora menor: limpiar procesos muertos de la lista procs para evitar memory leak
