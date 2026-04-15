@@ -6,10 +6,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from src.database import SessionLocal
 from src.etl.sync_service import SyncService
-from src.reports.excel_generator import (
-    generate_vendedor_report,
-    generate_all_vendedor_reports,
-)
+from src.reports.excel_generator import generate_vendedor_report
 from src.reports.email_service import (
     send_report_email,
     build_report_email_html,
@@ -58,17 +55,9 @@ def scheduled_sync_and_report():
         loop.close()
         logger.info("Sincronización diaria completada")
 
-        # ── FIX 3: Pasar rango de fechas explícito (año actual hasta hoy) ──
         date_from = date(today.year, 1, 1)
         date_to = today
-        filepaths = generate_all_vendedor_reports(db, date_from, date_to)
-        logger.info(f"Reportes por vendedor generados: {len(filepaths)} archivos")
-        for fp in filepaths:
-            logger.info(f"  -> {fp}")
-
-        # ── FIX 5: Enviar reportes por email después de generarlos ──
-        if filepaths:
-            _send_daily_report_emails(db, filepaths, date_from, date_to)
+        _generate_and_send_individual_reports(db, date_from, date_to)
 
     except Exception as e:
         logger.error(f"Error en tarea programada: {e}", exc_info=True)
@@ -76,70 +65,82 @@ def scheduled_sync_and_report():
         db.close()
 
 
-def _send_daily_report_emails(db, filepaths, date_from, date_to):
-    """Envía los reportes diarios por email a los destinatarios configurados."""
-    try:
-        email_config = check_email_config()
-        if not email_config["configured"]:
-            logger.warning(
-                "Email no configurado (RESEND_API_KEY). Reportes generados pero no enviados."
+def _generate_and_send_individual_reports(db, date_from, date_to):
+    """Genera reportes y envía cada uno SOLO a los emails del vendedor correspondiente."""
+    from src.models.models import ReporteProgramado, Empleado
+
+    email_config = check_email_config()
+    if not email_config["configured"]:
+        logger.warning(
+            "Email no configurado (RESEND_API_KEY). Generando reportes sin enviar."
+        )
+
+    date_range_str = (
+        f"{date_from.strftime('%d/%m/%Y')} - {date_to.strftime('%d/%m/%Y')}"
+    )
+
+    schedules = (
+        db.query(ReporteProgramado).filter(ReporteProgramado.activo == True).all()
+    )
+    sched_by_vendedor = {}
+    for s in schedules:
+        if s.vendedor_obuma_id:
+            sched_by_vendedor[str(s.vendedor_obuma_id)] = s
+
+    all_filepaths = []
+    for vid in TRACKED_VENDEDOR_IDS:
+        try:
+            fp = generate_vendedor_report(db, vid, date_from, date_to)
+            if not fp:
+                continue
+            all_filepaths.append(fp)
+            logger.info(f"Reporte generado: {fp}")
+
+            if not email_config["configured"]:
+                continue
+
+            sched = sched_by_vendedor.get(vid)
+            if not sched or not sched.emails_destino:
+                logger.warning(f"Vendedor {vid}: sin emails configurados, reporte no enviado")
+                continue
+
+            emails = [
+                e.strip()
+                for e in sched.emails_destino.replace("\n", ",").split(",")
+                if e.strip() and "@" in e.strip()
+            ]
+            if not emails:
+                continue
+
+            emp = (
+                db.query(Empleado)
+                .filter(Empleado.obuma_id == vid)
+                .first()
             )
-            return
+            vname = emp.nombre if emp else f"Vendedor {vid}"
 
-        # Buscar destinatarios: primero de reportes programados activos tipo "todos"
-        from src.models.models import ReporteProgramado
-
-        schedules = (
-            db.query(ReporteProgramado).filter(ReporteProgramado.activo == True).all()
-        )
-
-        # Recopilar todos los emails únicos de reportes programados
-        all_emails = set()
-        for sched in schedules:
-            if sched.emails_destino:
-                for e in sched.emails_destino.replace("\n", ",").split(","):
-                    e = e.strip()
-                    if e and "@" in e:
-                        all_emails.add(e)
-
-        if not all_emails:
-            # Fallback: si no hay reportes programados, usar variable de entorno
-            import os
-
-            fallback = os.environ.get("REPORT_EMAIL_TO", "")
-            if fallback:
-                all_emails = {e.strip() for e in fallback.split(",") if e.strip()}
-
-        if not all_emails:
-            logger.warning(
-                "No hay destinatarios configurados para envío diario. "
-                "Configure un reporte programado o la variable REPORT_EMAIL_TO."
+            subject = f"Reporte {vname} - {date_range_str}"
+            body = build_report_email_html(
+                vname,
+                "Reporte Diario Automático",
+                date_range_str,
+                {
+                    "Vendedor": vname,
+                    "Periodo": date_range_str,
+                    "Generado": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                },
             )
-            return
 
-        date_range_str = (
-            f"{date_from.strftime('%d/%m/%Y')} - {date_to.strftime('%d/%m/%Y')}"
-        )
-        subject = f"Reportes Vendedores - {date_range_str}"
-        body = build_report_email_html(
-            "Todos los Vendedores",
-            "Reporte Diario Automático",
-            date_range_str,
-            {
-                "Archivos generados": len(filepaths),
-                "Periodo": date_range_str,
-                "Generado": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            },
-        )
+            result = send_report_email(emails, subject, body, [fp])
+            if result["success"]:
+                logger.info(f"Reporte {vname} enviado a: {emails}")
+            else:
+                logger.error(f"Error enviando reporte {vname}: {result.get('error')}")
 
-        result = send_report_email(list(all_emails), subject, body, filepaths)
-        if result["success"]:
-            logger.info(f"Reportes diarios enviados exitosamente a: {list(all_emails)}")
-        else:
-            logger.error(f"Error enviando reportes diarios: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"Error generando/enviando reporte vendedor {vid}: {e}", exc_info=True)
 
-    except Exception as e:
-        logger.error(f"Error en envío de emails diarios: {e}", exc_info=True)
+    logger.info(f"Reportes generados: {len(all_filepaths)} archivos")
 
 
 def process_scheduled_reports():
