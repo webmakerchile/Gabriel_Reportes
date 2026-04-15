@@ -509,8 +509,10 @@ def generate_vendedor_report(
     for cid in all_client_keys:
         monthly = client_data.get(cid, defaultdict(float))
         info = client_info.get(cid, {"rut": "", "nombre": ""})
-        # FIX 4: No usar max(val, 0) — las Notas de Crédito generan valores negativos
-        # legítimos que deben reflejarse en el reporte para mostrar cifras reales.
+        rut_val = (info.get("rut") or "").strip()
+        nombre_val = (info.get("nombre") or "").strip()
+        if rut_val.startswith("OBU-") and not nombre_val:
+            continue
         month_values = [
             monthly.get(m, 0) if m in active_months else 0 for m in range(1, 13)
         ]

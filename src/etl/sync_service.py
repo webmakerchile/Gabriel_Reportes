@@ -155,6 +155,9 @@ class SyncService:
 
             rut_raw = (item.get("cliente_rut", "") or "").strip()
             nombre = item.get("cliente_razon_social", item.get("cliente_nombre_fantasia", ""))
+
+            if not (nombre or "").strip() and not rut_raw:
+                continue
             email = item.get("cliente_email", "")
             telefono = item.get("cliente_telefono", item.get("cliente_celular", ""))
             direccion = item.get("cliente_direccion_facturacion", "")
