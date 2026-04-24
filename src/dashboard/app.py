@@ -1085,17 +1085,29 @@ elif page == "Vendedores":
                 actual_maq_for_pct = max(actual_maq, 0)
                 actual_total_for_pct = max(actual_total, 0)
 
-                total_cartera_count = db.query(func.count(VendedorCartera.id)).filter(
+                total_cartera_count = db.query(func.count(VendedorCartera.id)).join(
+                    ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
+                ).filter(
                     VendedorCartera.empleado_obuma_id == vid,
-                    VendedorCartera.activo == True
+                    VendedorCartera.activo == True,
+                    ~(
+                        ClienteFinal.rut.like('OBU-%') &
+                        (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
+                    )
                 ).scalar() or 0
 
-                clientes_atendidos = db.query(func.count(func.distinct(VentaHistorico.cliente_id))).filter(
+                clientes_atendidos = db.query(func.count(func.distinct(VentaHistorico.cliente_id))).join(
+                    ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id
+                ).filter(
                     VentaHistorico.vendedor_id == vid,
                     extract('year', VentaHistorico.fecha) == rend_anio,
                     extract('month', VentaHistorico.fecha) == rend_mes,
                     VentaHistorico.anulada == False,
-                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
+                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+                    ~(
+                        ClienteFinal.rut.like('OBU-%') &
+                        (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
+                    )
                 ).scalar() or 0
 
                 cobertura_pct = (clientes_atendidos / total_cartera_count * 100) if total_cartera_count > 0 else 0
