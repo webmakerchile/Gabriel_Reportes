@@ -145,8 +145,8 @@ def _seed_reportes_programados(db):
                 vendedor_obuma_id=cfg["vendedor_obuma_id"],
                 frecuencia="semanal",
                 dia_semana=4,
-                hora=18,
-                minuto=30,
+                hora=23,
+                minuto=0,
                 emails_destino=emails,
                 filtro_fecha_tipo="mes_actual",
                 activo=True,
@@ -157,7 +157,7 @@ def _seed_reportes_programados(db):
             if GABRIEL_EMAIL not in (existing.emails_destino or ""):
                 existing.emails_destino = emails
     db.commit()
-    logger.info("Reportes programados seeded/verified (5 semanales viernes 18:30)")
+    logger.info("Reportes programados seeded/verified (5 semanales viernes 23:00)")
 
 
 def _auto_sync_current_month_items():

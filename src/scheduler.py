@@ -53,14 +53,25 @@ def scheduled_sync_and_report():
         results["productos"] = loop.run_until_complete(service.sync_productos())
 
         loop.close()
-        logger.info("Sincronización diaria completada")
-
-        date_from = date(today.year, 1, 1)
-        date_to = today
-        _generate_and_send_individual_reports(db, date_from, date_to)
+        logger.info("Sincronización diaria completada (sin envío de reportes)")
 
     except Exception as e:
         logger.error(f"Error en tarea programada: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+def weekly_friday_reports():
+    """Genera y envía reportes semanales solo los viernes a las 23:00 Chile."""
+    logger.info("Ejecutando envío semanal de reportes (viernes 23:00)...")
+    db = SessionLocal()
+    try:
+        today = date.today()
+        date_from = date(today.year, 1, 1)
+        date_to = today
+        _generate_and_send_individual_reports(db, date_from, date_to)
+    except Exception as e:
+        logger.error(f"Error en envío semanal de reportes: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -324,8 +335,15 @@ def start_scheduler():
     scheduler.add_job(
         scheduled_sync_and_report,
         CronTrigger(hour=18, minute=30, timezone="America/Santiago"),
-        id="daily_sync_report",
-        name="Sincronización y Reporte Diario 18:30 Chile",
+        id="daily_sync",
+        name="Sincronización Diaria 18:30 Chile (sin envío)",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        weekly_friday_reports,
+        CronTrigger(day_of_week="fri", hour=23, minute=0, timezone="America/Santiago"),
+        id="weekly_friday_reports",
+        name="Envío Semanal de Reportes - Viernes 23:00 Chile",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -338,6 +356,6 @@ def start_scheduler():
     scheduler.start()
     _scheduler_instance = scheduler
     logger.info(
-        "Scheduler iniciado - Sync diario 18:30 + Verificacion programados cada 15 min"
+        "Scheduler iniciado - Sync diario 18:30 + Reportes semanales viernes 23:00 + Verificacion programados cada 15 min"
     )
     return scheduler
