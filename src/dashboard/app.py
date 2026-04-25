@@ -1096,19 +1096,40 @@ elif page == "Vendedores":
                     )
                 ).scalar() or 0
 
-                clientes_atendidos = db.query(func.count(func.distinct(VentaHistorico.cliente_id))).join(
-                    ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id
-                ).filter(
-                    VentaHistorico.vendedor_id == vid,
-                    extract('year', VentaHistorico.fecha) == rend_anio,
-                    extract('month', VentaHistorico.fecha) == rend_mes,
-                    VentaHistorico.anulada == False,
-                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
-                    ~(
-                        ClienteFinal.rut.like('OBU-%') &
-                        (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
+                # Regla: solo cuentan clientes con neto > 0 (NCs <= facturas).
+                # Si el cliente solo tiene NCs o el neto es <= 0, NO cuenta como atendido.
+                _net_per_client_subq = (
+                    db.query(
+                        VentaHistorico.cliente_id.label('cli_id'),
+                        func.sum(
+                            sql_case(
+                                (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                                else_=VentaHistorico.subtotal,
+                            )
+                        ).label('neto')
                     )
-                ).scalar() or 0
+                    .join(ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id)
+                    .filter(
+                        VentaHistorico.vendedor_id == vid,
+                        extract('year', VentaHistorico.fecha) == rend_anio,
+                        extract('month', VentaHistorico.fecha) == rend_mes,
+                        VentaHistorico.anulada == False,
+                        VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+                        ~(
+                            ClienteFinal.rut.like('OBU-%') &
+                            (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
+                        )
+                    )
+                    .group_by(VentaHistorico.cliente_id)
+                    .having(func.sum(
+                        sql_case(
+                            (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                            else_=VentaHistorico.subtotal,
+                        )
+                    ) > 0)
+                    .subquery()
+                )
+                clientes_atendidos = db.query(func.count(_net_per_client_subq.c.cli_id)).scalar() or 0
 
                 cobertura_pct = (clientes_atendidos / total_cartera_count * 100) if total_cartera_count > 0 else 0
 

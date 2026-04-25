@@ -176,7 +176,9 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
         total_ventas = ventas_result.total_ventas or 0
         num_docs = ventas_result.num_docs or 0
 
-        if num_docs > 0:
+        # Regla: si neto <= 0 (NCs >= facturas), NO cuenta como compra real.
+        # Va a "no_compraron" para no inflar la cobertura.
+        if num_docs > 0 and total_ventas > 0:
             compraron.append(
                 {
                     "nombre": cli.nombre or "",
@@ -513,14 +515,17 @@ def generate_vendedor_report(
         nombre_val = (info.get("nombre") or "").strip()
         if rut_val.startswith("OBU-") and not nombre_val:
             continue
+        # Regla: valor negativo (NC > facturas) = cero (no genero compra ese mes).
+        # Aplica a display, total, ult 3 meses y cobertura.
         month_values = [
-            monthly.get(m, 0) if m in active_months else 0 for m in range(1, 13)
+            max(monthly.get(m, 0), 0) if m in active_months else 0
+            for m in range(1, 13)
         ]
         total = sum(month_values)
         meses_con_venta = sum(
             1 for i, v in enumerate(month_values) if v > 0 and (i + 1) in active_months
         )
-        ventas_ultimos_3 = sum(monthly.get(m, 0) for m in last_3_months)
+        ventas_ultimos_3 = sum(max(monthly.get(m, 0), 0) for m in last_3_months)
 
         rows.append(
             {
@@ -594,19 +599,14 @@ def generate_vendedor_report(
             cell = ws.cell(row=row_num, column=5 + m, value=val)
             cell.number_format = CURRENCY_FORMAT
             cell.border = THIN_BORDER
-            if val < 0:
-                cell.fill = LIGHT_RED_FILL
-                cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
-            elif val == 0:
+            # Negativos ya fueron clampeados a 0 en month_values: solo amarillo para 0
+            if val == 0:
                 cell.fill = YELLOW_FILL
 
         total_val = r["total"]
         cell = ws.cell(row=row_num, column=17, value=total_val)
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
-        if total_val < 0:
-            cell.fill = LIGHT_RED_FILL
-            cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
 
         cell = ws.cell(row=row_num, column=18, value=r["pct_acumulado"])
         cell.number_format = PERCENT_FORMAT
@@ -627,10 +627,8 @@ def generate_vendedor_report(
         cell = ws.cell(row=row_num, column=22, value=ult3_val)
         cell.number_format = CURRENCY_FORMAT
         cell.border = THIN_BORDER
-        if ult3_val < 0:
-            cell.fill = LIGHT_RED_FILL
-            cell.font = Font(name="Calibri", size=11, color="C00000", bold=True)
-        elif ult3_val == 0:
+        # Negativos ya clampeados a 0: solo amarillo para 0
+        if ult3_val == 0:
             cell.fill = YELLOW_FILL
 
         riesgo_val = r["nivel_riesgo"]
