@@ -1,0 +1,62 @@
+Trabajamos sobre el proyecto Gabriel_Reportes-main. Ya leí 
+replit.md, scheduler.py, excel_generator.py, email_service.py 
+y models.py. El cliente pidió una nueva funcionalidad.
+
+CONTEXTO DE LO EXISTENTE (no tocar):
+- APScheduler ya corre: sync diario 18:30 + reportes viernes 23:00
+- VentaHistorico ya tiene total_pagado y total_por_pagar sincronizados
+- VALID_DOC_TYPES filter + restar Notas de Crédito ya implementado
+- 5 vendedores trackeados en TRACKED_VENDEDOR_IDS
+- Email service vía Resend ya funciona
+
+NUEVA FUNCIONALIDAD REQUERIDA POR GABRIEL:
+
+1. CREAR nueva función en excel_generator.py llamada 
+   generate_cartera_cobranza_report(db, vendedor_obuma_id, report_date)
+   
+   Estructura del Excel (una hoja por vendedor), columnas exactas:
+   - DOCUMENTO (tipo_documento)
+   - FOLIO
+   - FECHA (fecha emisión de la factura)
+   - FECHA VCTO (fecha_vencimiento desde data_json de VentaHistorico.detalle)
+   - FECHA HOY (report_date)
+   - DÍAS ATRASO (report_date - fecha emisión)
+   - CLIENTE (nombre cliente)
+   - CLIENTE RUT
+   - VENDEDOR (nombre completo)
+   - POR PAGAR (total_por_pagar)
+
+2. FILTROS:
+   - Solo facturas con total_por_pagar > 0 (pendientes de cobro)
+   - Solo VALID_DOC_TYPES (excluir Tipo 4 y anuladas)
+   - Restar Notas de Crédito
+   - Agrupadas por cliente dentro del Excel
+
+3. SEMÁFORO DE COLORES (fill en fila de cada factura según días atraso):
+   - Menos de 30 días: sin color
+   - 30 a 45 días: VERDE (hex C6EFCE)
+   - 46 a 60 días: NARANJA (hex FFD966)
+   - 61 o más: ROJO (hex F4B7B7)
+
+4. AGREGAR nueva función en scheduler.py:
+   weekly_monday_cartera_reports() 
+   - Genera el reporte de cartera por vendedor usando la nueva función
+   - Envía por email a cada vendedor (emails_destino desde ReporteProgramado)
+   - Asunto: "Reporte Cartera Cobranza [nombre_vendedor] - [fecha]"
+
+5. REGISTRAR el nuevo cron en start_scheduler():
+   - Cron: LUNES a las 09:00 hora Chile
+   - ID: "weekly_monday_cartera"
+
+PASOS A SEGUIR (pregúntame antes de cada uno):
+
+PASO 1: Muéstrame primero UN ejemplo real consultando la BD 
+de qué estructura tiene data_json de VentaHistorico para ver 
+si el campo fecha_vencimiento existe ahí o tengo que calcularlo.
+
+PASO 2: Proponme la función generate_cartera_cobranza_report 
+con las queries SQL correctas y espera mi aprobación.
+
+PASO 3: Implementa, hace el commit y push a GitHub.
+
+Empieza por el PASO 1.
