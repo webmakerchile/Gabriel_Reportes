@@ -131,6 +131,77 @@ def _resolve_date_range(date_from, date_to):
     return date_from, date_to, True
 
 
+def _parse_detalle_json(venta):
+    """Parsea el campo VentaHistorico.detalle (text JSON) de forma segura.
+    Retorna {} si está vacío o no es JSON válido."""
+    if not venta or not getattr(venta, "detalle", None):
+        return {}
+    try:
+        return json.loads(venta.detalle) or {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _get_emision_date(venta, detalle_json=None):
+    """Obtiene la fecha de emisión de una VentaHistorico con COALESCE:
+    1) Usa la columna VentaHistorico.fecha si está presente.
+    2) Si está NULL, reconstruye la fecha desde el JSON detalle
+       usando venta_dia/venta_mes/venta_ano.
+    3) Si no se puede reconstruir, retorna None.
+    """
+    fecha_db = getattr(venta, "fecha", None) if venta else None
+    if fecha_db is not None:
+        if isinstance(fecha_db, datetime):
+            return fecha_db.date()
+        return fecha_db
+
+    if detalle_json is None:
+        detalle_json = _parse_detalle_json(venta)
+
+    try:
+        dia_raw = detalle_json.get("venta_dia")
+        mes_raw = detalle_json.get("venta_mes")
+        ano_raw = detalle_json.get("venta_ano")
+        if not dia_raw or not mes_raw or not ano_raw:
+            return None
+        dia = int(str(dia_raw).strip())
+        mes = int(str(mes_raw).strip())
+        ano = int(str(ano_raw).strip())
+        if dia <= 0 or mes <= 0 or ano <= 0:
+            return None
+        return date(ano, mes, dia)
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _get_vencimiento_date(venta, detalle_json=None):
+    """Obtiene la fecha de vencimiento desde detalle.venta_fecha_vencimiento.
+    Maneja '0000-00-00' y cadenas vacías como None.
+    Acepta formato 'YYYY-MM-DD' o 'YYYY-MM-DD HH:MM:SS'.
+    """
+    if detalle_json is None:
+        detalle_json = _parse_detalle_json(venta)
+
+    raw = detalle_json.get("venta_fecha_vencimiento")
+    if raw is None:
+        return None
+    raw_str = str(raw).strip()
+    if not raw_str or raw_str.startswith("0000-00-00") or raw_str == "0":
+        return None
+    try:
+        if " " in raw_str:
+            raw_str = raw_str.split(" ")[0]
+        parts = raw_str.split("-")
+        if len(parts) != 3:
+            return None
+        ano, mes, dia = int(parts[0]), int(parts[1]), int(parts[2])
+        if ano <= 0 or mes <= 0 or dia <= 0:
+            return None
+        return date(ano, mes, dia)
+    except (ValueError, TypeError):
+        return None
+
+
 def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to):
     cartera_entries = (
         db.query(VendedorCartera, ClienteFinal)
