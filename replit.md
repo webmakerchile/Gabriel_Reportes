@@ -8,7 +8,7 @@ Plataforma de Business Intelligence para Gabriel Hoyos, quien gestiona multiples
 - **Frontend**: Streamlit (puerto 5000, directo sin nginx) - Dashboard interactivo de control
 - **Database**: PostgreSQL - Single Source of Truth con tablas historicas y datos completos de Obuma
 - **ETL**: Modulo Python para consumir API de Obuma (23 endpoints sincronizados automaticamente)
-- **Scheduler**: APScheduler - Sync diario 18:30 (clientes, ventas, ventas_items, cobros, empleados, productos, SIN envío) + Reportes semanales SOLO viernes 23:00 hora Chile
+- **Scheduler**: APScheduler - Sync diario 18:30 (clientes, ventas, ventas_items, cobros, empleados, productos, SIN envío) + Reportes diarios automáticos Lun-Jue 20:30 + Reportes semanales viernes 23:00 hora Chile
 - **Reports**: openpyxl - Generacion de reportes Excel profesionales
 - **API Catalog**: Registro completo de 30 endpoints de Obuma en base de datos para automatizaciones
 

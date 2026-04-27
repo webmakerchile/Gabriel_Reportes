@@ -76,6 +76,29 @@ def weekly_friday_reports():
         db.close()
 
 
+def daily_weekday_reports():
+    """Reportes diarios automaticos lunes-jueves a las 20:30 Chile.
+    El viernes se omite porque ese dia se envia el reporte semanal a las 23:00."""
+    today = date.today()
+    # weekday(): lunes=0, martes=1, miercoles=2, jueves=3, viernes=4
+    if today.weekday() == 4:
+        logger.info("Viernes detectado: omitiendo reporte diario (se enviara el semanal a las 23:00).")
+        return
+    if today.weekday() >= 5:
+        logger.info("Fin de semana: omitiendo reporte diario.")
+        return
+    logger.info(f"Ejecutando envio diario de reportes ({today.strftime('%A')} 20:30)...")
+    db = SessionLocal()
+    try:
+        date_from = date(today.year, 1, 1)
+        date_to = today
+        _generate_and_send_individual_reports(db, date_from, date_to)
+    except Exception as e:
+        logger.error(f"Error en envio diario de reportes: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 def _generate_and_send_individual_reports(db, date_from, date_to):
     """Genera reportes y envía cada uno SOLO a los emails del vendedor correspondiente."""
     from src.models.models import ReporteProgramado, Empleado
@@ -340,6 +363,13 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.add_job(
+        daily_weekday_reports,
+        CronTrigger(day_of_week="mon-thu", hour=20, minute=30, timezone="America/Santiago"),
+        id="daily_weekday_reports",
+        name="Envío Diario de Reportes - Lun-Jue 20:30 Chile",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         weekly_friday_reports,
         CronTrigger(day_of_week="fri", hour=23, minute=0, timezone="America/Santiago"),
         id="weekly_friday_reports",
@@ -356,6 +386,6 @@ def start_scheduler():
     scheduler.start()
     _scheduler_instance = scheduler
     logger.info(
-        "Scheduler iniciado - Sync diario 18:30 + Reportes semanales viernes 23:00 + Verificacion programados cada 15 min"
+        "Scheduler iniciado - Sync diario 18:30 + Reportes diarios Lun-Jue 20:30 + Reportes semanales viernes 23:00 + Verificacion programados cada 15 min"
     )
     return scheduler
