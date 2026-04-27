@@ -27,6 +27,16 @@ Plataforma de Business Intelligence para Gabriel Hoyos, quien gestiona multiples
 - Excel report evolution sheet includes ALL cartera clients (with and without sales)
 - Clients with $0 sales appear at bottom with yellow-filled zero cells
 
+## CRITICAL: Vendedor Field Mapping (rel_usuario_id vs rel_vendedor_id)
+- **Para ASIGNACIÓN de CLIENTES a vendedor (cartera)**: usar `ClienteFinal.data_json.rel_usuario_id`
+  - Es el "usuario dueño" del cliente en Obuma (quien lo gestiona)
+  - Esto es lo que popula VendedorCartera
+- **Para VENTAS individuales (facturas, boletas, NCs)**: usar `VentaHistorico.vendedor_id` (columna BD)
+  - Esta columna corresponde a `detalle.rel_vendedor_id` en el JSON crudo de Obuma
+  - Es el VENDEDOR REAL del documento (quien lo emitió/gestionó la venta)
+  - NO usar `rel_usuario_id` para ventas — ese es quien creó el documento (cajero/operador), no el vendedor
+- Verificación: 30 registros aleatorios → vendedor_id (columna) coincide 30/30 con rel_vendedor_id (JSON)
+
 ## Project Structure
 ```
 main.py                     # Entry point - inicia FastAPI + Streamlit + seed DB
