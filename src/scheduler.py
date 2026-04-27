@@ -84,7 +84,7 @@ def daily_weekday_reports():
     if today.weekday() == 4:
         logger.info("Viernes detectado: omitiendo reporte diario (se enviara el semanal a las 23:00).")
         return
-    logger.info(f"Ejecutando envio diario de reportes ({today.strftime('%A')} 20:30)...")
+    logger.info(f"Ejecutando envio diario de reportes ({today.strftime('%A')} 20:00)...")
     db = SessionLocal()
     try:
         date_from = date(today.year, 1, 1)
@@ -361,9 +361,9 @@ def start_scheduler():
     )
     scheduler.add_job(
         daily_weekday_reports,
-        CronTrigger(day_of_week="mon-thu,sat,sun", hour=20, minute=30, timezone="America/Santiago"),
+        CronTrigger(day_of_week="mon-thu,sat,sun", hour=20, minute=0, timezone="America/Santiago"),
         id="daily_weekday_reports",
-        name="Envío Diario de Reportes - Lun-Jue + Sab-Dom 20:30 Chile",
+        name="Envío Diario de Reportes - Lun-Jue + Sab-Dom 20:00 Chile",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -383,6 +383,6 @@ def start_scheduler():
     scheduler.start()
     _scheduler_instance = scheduler
     logger.info(
-        "Scheduler iniciado - Sync diario 18:30 + Reportes diarios Lun-Jue 20:30 + Reportes semanales viernes 23:00 + Verificacion programados cada 15 min"
+        "Scheduler iniciado - Sync diario 18:30 + Reportes diarios Lun-Jue + Sab-Dom 20:00 + Reportes semanales viernes 23:00 + Verificacion programados cada 15 min"
     )
     return scheduler
