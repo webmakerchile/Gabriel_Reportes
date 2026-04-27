@@ -896,3 +896,272 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
         f"Daily consolidated report generated: {filepath} with {len(filepaths)} vendedor reports"
     )
     return filepath
+
+
+# ============================================================================
+# REPORTE CARTERA / COBRANZA (días de atraso desde fecha de emisión)
+# ============================================================================
+
+COBRANZA_HEADERS = [
+    "DOCUMENTO", "FOLIO", "FECHA", "FECHA VCTO", "FECHA HOY",
+    "DÍAS ATRASO", "CLIENTE", "CLIENTE RUT", "VENDEDOR", "POR PAGAR",
+]
+
+COBRANZA_VERDE = PatternFill(start_color="FFC6EFCE", end_color="FFC6EFCE", fill_type="solid")
+COBRANZA_NARANJA = PatternFill(start_color="FFFFD966", end_color="FFFFD966", fill_type="solid")
+COBRANZA_ROJO = PatternFill(start_color="FFF4B7B7", end_color="FFF4B7B7", fill_type="solid")
+COBRANZA_GRIS_SUBTOTAL = PatternFill(start_color="FFD9D9D9", end_color="FFD9D9D9", fill_type="solid")
+COBRANZA_GRIS_TOTAL = PatternFill(start_color="FFA6A6A6", end_color="FFA6A6A6", fill_type="solid")
+
+NEGATIVO_FONT = Font(name="Calibri", size=11, color="FFC00000", bold=True)
+SIN_VCTO_FONT = Font(name="Calibri", size=11, color="FF7F7F7F", italic=True)
+SUBTOTAL_FONT = Font(name="Calibri", size=11, bold=True)
+TOTAL_GENERAL_FONT = Font(name="Calibri", size=12, bold=True, color="FFFFFFFF")
+
+
+def _semaforo_cobranza_fill(dias_atraso):
+    """Retorna PatternFill segun dias de atraso desde fecha de emision.
+    < 30: None | 30-45: verde | 46-60: naranja | >= 61: rojo"""
+    if dias_atraso is None or dias_atraso < 30:
+        return None
+    if dias_atraso <= 45:
+        return COBRANZA_VERDE
+    if dias_atraso <= 60:
+        return COBRANZA_NARANJA
+    return COBRANZA_ROJO
+
+
+def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
+    """Consulta y arma lista de dicts con datos por documento pendiente.
+    Filtros: vendedor_id == vendedor_obuma_id, total_por_pagar > 0,
+             tipo_documento in VALID_DOC_TYPES, no anuladas.
+    NCs: POR PAGAR negativo. Orden: cliente asc, dias_atraso desc."""
+    ventas = (
+        db.query(VentaHistorico, ClienteFinal, Empleado)
+        .outerjoin(ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id)
+        .outerjoin(Empleado, Empleado.obuma_id == VentaHistorico.vendedor_id)
+        .filter(
+            VentaHistorico.vendedor_id == str(vendedor_obuma_id),
+            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES),
+            VentaHistorico.total_por_pagar > 0,
+            func.coalesce(VentaHistorico.anulada, False) == False,
+        )
+        .all()
+    )
+
+    rows = []
+    for venta, cliente, empleado in ventas:
+        detalle = _parse_detalle_json(venta)
+        fecha_emi = _get_emision_date(venta, detalle)
+        fecha_vto = _get_vencimiento_date(venta, detalle)
+        dias = (report_date - fecha_emi).days if fecha_emi else None
+
+        es_nc = venta.tipo_documento in NC_DOC_TYPES
+        por_pagar_real = float(venta.total_por_pagar or 0)
+        por_pagar_signed = -por_pagar_real if es_nc else por_pagar_real
+
+        rows.append({
+            "documento": venta.tipo_documento or "",
+            "folio": venta.folio or "",
+            "fecha_emi": fecha_emi,
+            "fecha_vto": fecha_vto,
+            "dias_atraso": dias,
+            "cliente_nombre": (cliente.nombre if cliente else None) or "(Sin cliente)",
+            "cliente_rut": (cliente.rut if cliente else "") or "",
+            "cliente_id": venta.cliente_id,
+            "vendedor_nombre": (empleado.nombre if empleado else f"Vendedor {vendedor_obuma_id}"),
+            "por_pagar": por_pagar_signed,
+            "es_nc": es_nc,
+        })
+
+    # Orden: cliente asc, luego dias_atraso desc (None al final dentro del cliente)
+    rows.sort(key=lambda r: (
+        r["cliente_nombre"].lower(),
+        -(r["dias_atraso"] if r["dias_atraso"] is not None else -10**9),
+    ))
+    return rows
+
+
+def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date: date = None):
+    """Genera Excel de cartera/cobranza para UN vendedor.
+
+    Retorna filepath del Excel generado, o None si el vendedor no tiene
+    documentos pendientes (en cuyo caso no se debe enviar email).
+
+    Estructura: 1 hoja con columnas DOCUMENTO, FOLIO, FECHA, FECHA VCTO,
+    FECHA HOY, DÍAS ATRASO, CLIENTE, CLIENTE RUT, VENDEDOR, POR PAGAR.
+    Agrupado por cliente con subtotal en gris + TOTAL GENERAL al final.
+    Semaforo por dias desde emision: 30-45 verde, 46-60 naranja, 61+ rojo.
+    NCs: fila con POR PAGAR negativo en rojo (resta del saldo).
+    Sin vencimiento: texto 'Sin vencimiento' en gris cursiva.
+    """
+    if report_date is None:
+        report_date = date.today()
+
+    vendedor_obuma_id = str(vendedor_obuma_id)
+    rows = _build_cobranza_rows(db, vendedor_obuma_id, report_date)
+
+    if not rows:
+        logger.info(
+            f"Cartera/Cobranza: vendedor {vendedor_obuma_id} sin documentos pendientes en {report_date}. Se omite generacion."
+        )
+        return None
+
+    empleado = (
+        db.query(Empleado).filter(Empleado.obuma_id == vendedor_obuma_id).first()
+    )
+    vendedor_nombre = (empleado.nombre if empleado else rows[0]["vendedor_nombre"]) or f"Vendedor {vendedor_obuma_id}"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Cartera Cobranza"
+
+    # Titulo
+    ws.cell(row=1, column=1, value=f"Reporte Cartera Cobranza - {vendedor_nombre}").font = TITLE_FONT
+    ws.cell(row=2, column=1, value=f"Fecha reporte: {report_date.strftime('%d/%m/%Y')}").font = SUBTITLE_FONT
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COBRANZA_HEADERS))
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(COBRANZA_HEADERS))
+
+    header_row = 4
+    for i, h in enumerate(COBRANZA_HEADERS, 1):
+        ws.cell(row=header_row, column=i, value=h)
+    _style_header(ws, header_row, len(COBRANZA_HEADERS))
+
+    current_row = header_row + 1
+    current_cliente = None
+    cliente_subtotal = 0.0
+    cliente_subtotal_start_row = current_row
+    grand_total = 0.0
+
+    def _flush_cliente_subtotal(end_row):
+        """Escribe fila de subtotal para el cliente recien terminado."""
+        nonlocal current_row
+        if current_cliente is None:
+            return
+        for col in range(1, len(COBRANZA_HEADERS) + 1):
+            cell = ws.cell(row=current_row, column=col)
+            cell.fill = COBRANZA_GRIS_SUBTOTAL
+            cell.border = THIN_BORDER
+            cell.font = SUBTOTAL_FONT
+        ws.cell(row=current_row, column=9, value=f"Subtotal {current_cliente}").alignment = Alignment(horizontal="right")
+        cell_sub = ws.cell(row=current_row, column=10, value=cliente_subtotal)
+        cell_sub.number_format = CURRENCY_FORMAT
+        current_row += 1
+
+    for r in rows:
+        # Cambio de cliente -> escribir subtotal del anterior
+        if current_cliente is not None and r["cliente_nombre"] != current_cliente:
+            _flush_cliente_subtotal(current_row - 1)
+            cliente_subtotal = 0.0
+            cliente_subtotal_start_row = current_row
+
+        if current_cliente != r["cliente_nombre"]:
+            current_cliente = r["cliente_nombre"]
+
+        # Fila de datos
+        fila_fill = _semaforo_cobranza_fill(r["dias_atraso"])
+        values = [
+            r["documento"],
+            r["folio"],
+            r["fecha_emi"].strftime("%d-%m-%Y") if r["fecha_emi"] else "",
+            r["fecha_vto"].strftime("%d-%m-%Y") if r["fecha_vto"] else "Sin vencimiento",
+            report_date.strftime("%d-%m-%Y"),
+            r["dias_atraso"] if r["dias_atraso"] is not None else "",
+            r["cliente_nombre"],
+            r["cliente_rut"],
+            r["vendedor_nombre"],
+            r["por_pagar"],
+        ]
+        for i, val in enumerate(values, 1):
+            cell = ws.cell(row=current_row, column=i, value=val)
+            cell.border = THIN_BORDER
+            if fila_fill is not None:
+                cell.fill = fila_fill
+            # Sin vencimiento estilizado
+            if i == 4 and val == "Sin vencimiento":
+                cell.font = SIN_VCTO_FONT
+            # POR PAGAR formato moneda
+            if i == 10:
+                cell.number_format = CURRENCY_FORMAT
+                if r["es_nc"]:
+                    cell.font = NEGATIVO_FONT
+            # Centrar columnas de fechas y dias
+            if i in (3, 4, 5, 6):
+                cell.alignment = Alignment(horizontal="center")
+
+        cliente_subtotal += r["por_pagar"]
+        grand_total += r["por_pagar"]
+        current_row += 1
+
+    # Subtotal del ultimo cliente
+    _flush_cliente_subtotal(current_row - 1)
+
+    # Fila TOTAL GENERAL
+    current_row += 1
+    for col in range(1, len(COBRANZA_HEADERS) + 1):
+        cell = ws.cell(row=current_row, column=col)
+        cell.fill = COBRANZA_GRIS_TOTAL
+        cell.border = THIN_BORDER
+        cell.font = TOTAL_GENERAL_FONT
+    ws.cell(row=current_row, column=9, value="TOTAL GENERAL").alignment = Alignment(horizontal="right")
+    cell_total = ws.cell(row=current_row, column=10, value=grand_total)
+    cell_total.number_format = CURRENCY_FORMAT
+    cell_total.font = TOTAL_GENERAL_FONT
+    cell_total.fill = COBRANZA_GRIS_TOTAL
+
+    # Anchos de columna
+    col_widths = [16, 10, 12, 14, 12, 12, 38, 14, 24, 16]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # Freeze panes (fija header + titulo)
+    ws.freeze_panes = "A5"
+
+    os.makedirs("reports", exist_ok=True)
+    safe_name = (vendedor_nombre or f"vendedor_{vendedor_obuma_id}").replace(" ", "_").replace("/", "_")
+    filename = f"cartera_cobranza_{safe_name}_{report_date.strftime('%Y%m%d')}.xlsx"
+    filepath = os.path.join("reports", filename)
+    wb.save(filepath)
+
+    try:
+        reporte = ReporteGenerado(
+            nombre_archivo=filename,
+            tipo="cartera_cobranza",
+            fecha_reporte=report_date,
+            ruta_archivo=filepath,
+        )
+        db.add(reporte)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"No se pudo registrar ReporteGenerado: {e}")
+        db.rollback()
+
+    logger.info(
+        f"Cartera/Cobranza generado: {filepath} ({len(rows)} docs, total ${grand_total:,.0f})"
+    )
+    return filepath
+
+
+def generate_all_cartera_cobranza_reports(db: Session, report_date: date = None):
+    """Genera reportes de cartera/cobranza para TODOS los vendedores trackeados.
+    Vendedores sin saldo pendiente son omitidos (no se genera Excel).
+    Retorna lista de tuplas (vendedor_obuma_id, filepath_o_None).
+    """
+    if report_date is None:
+        report_date = date.today()
+
+    tracked_ids = ['28856', '28886', '28887', '28891', '28892']
+    results = []
+    for vid in tracked_ids:
+        try:
+            fp = generate_cartera_cobranza_report(db, vid, report_date)
+            results.append((vid, fp))
+        except Exception as e:
+            logger.error(f"Error generando cartera/cobranza vendedor {vid}: {e}", exc_info=True)
+            results.append((vid, None))
+
+    generados = sum(1 for _, fp in results if fp)
+    logger.info(
+        f"Cartera/Cobranza batch completo: {generados}/{len(tracked_ids)} vendedores con docs pendientes"
+    )
+    return results

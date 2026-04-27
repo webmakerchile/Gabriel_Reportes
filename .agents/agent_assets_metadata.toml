@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "ALJpxquPCEozQMTSNOx43"
+uri = "file://reports/cartera_cobranza_Gabriel_Jaime_Hoyos_Guzman_20260427.xlsx"
+type = "table"
+title = "Cartera Cobranza - Gabriel Hoyos (prueba 27/04/2026)"
