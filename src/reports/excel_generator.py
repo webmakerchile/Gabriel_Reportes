@@ -66,6 +66,22 @@ BILLING_DOC_TYPES = ["Factura Electr.", "Factura Exenta", "Boleta Electr."]
 NC_DOC_TYPES = ["Nota Credito"]
 VALID_DOC_TYPES = BILLING_DOC_TYPES + NC_DOC_TYPES
 
+# Totales de referencia capturados manualmente desde la pantalla
+# "Facturas por Cobrar" de Obuma para cada vendedor trackeado.
+# Se usan para reconciliar el reporte de cartera contra Obuma y loguear
+# el % de diferencia (objetivo: <0.5%). Si el valor es None significa que
+# no hay snapshot reciente; el log mostrara solo el total interno.
+# Para actualizar: ir a Obuma > Facturas por Cobrar, filtrar por vendedor,
+# copiar el total y la fecha de captura aqui (mantener la fecha cerca del
+# valor para saber si esta vigente).
+OBUMA_REFERENCE_TOTALS = {
+    "28856": 42_502_743,  # Gabriel  (capturado 2026-04-27)
+    "28886": None,        # Jhonatan (pendiente de captura)
+    "28887": None,        # Ernesto  (pendiente de captura)
+    "28891": None,        # Pablo    (pendiente de captura)
+    "28892": None,        # Jesus    (pendiente de captura)
+}
+
 
 def _style_header(ws, row, col_count):
     for col in range(1, col_count + 1):
@@ -1126,7 +1142,11 @@ def _sync_for_cartera_report(db) -> dict:
 
         logger.info(f"Cartera sync inmediato OK en {time.time()-t0:.1f}s totales")
 
-        # Reconciliacion: log totales por vendedor trackeado para auditar contra Obuma
+        # Reconciliacion: log totales por vendedor trackeado y comparar contra
+        # los valores conocidos de la pantalla "Facturas por Cobrar" de Obuma.
+        # Para actualizar las referencias: ir a Obuma > Facturas por Cobrar,
+        # filtrar por vendedor y copiar el TOTAL en OBUMA_REFERENCE_TOTALS.
+        # Si el valor es None, solo se loguea el total interno sin %diff.
         try:
             tracked = [
                 ("28856", "Gabriel"),
@@ -1135,15 +1155,46 @@ def _sync_for_cartera_report(db) -> dict:
                 ("28891", "Pablo"),
                 ("28892", "Jesus"),
             ]
-            logger.info("Cartera/Cobranza RECONCILIACION (post-sync, comparar contra pantalla 'Facturas por Cobrar' de Obuma):")
+            logger.info(
+                "Cartera/Cobranza RECONCILIACION (post-sync vs pantalla 'Facturas por Cobrar' de Obuma):"
+            )
+            ok_count = 0
+            warn_count = 0
             for vid, name in tracked:
                 _rows = _build_cobranza_rows(db, vid, today)
                 _summary = _build_cobranza_summary(_rows, today)
+                excel_total = _summary["total_a_cobrar"]
+                obuma_ref = OBUMA_REFERENCE_TOTALS.get(vid)
+                if obuma_ref is None or obuma_ref == 0:
+                    logger.info(
+                        f"  [{vid}] {name}: docs={_summary['cant_docs']} "
+                        f"excel_total=${excel_total:,.0f} "
+                        f"vencido=${_summary['total_vencido']:,.0f} "
+                        f"({_summary['pct_vencido']:.1f}%) "
+                        f"obuma_ref=N/A (sin referencia configurada)"
+                    )
+                else:
+                    diff = excel_total - obuma_ref
+                    pct_diff = (diff / obuma_ref) * 100 if obuma_ref else 0.0
+                    estado = "OK" if abs(pct_diff) < 0.5 else "REVISAR"
+                    if estado == "OK":
+                        ok_count += 1
+                    else:
+                        warn_count += 1
+                    logger.info(
+                        f"  [{vid}] {name}: docs={_summary['cant_docs']} "
+                        f"excel_total=${excel_total:,.0f} "
+                        f"obuma_ref=${obuma_ref:,.0f} "
+                        f"diff=${diff:+,.0f} ({pct_diff:+.2f}%) "
+                        f"vencido=${_summary['total_vencido']:,.0f} "
+                        f"({_summary['pct_vencido']:.1f}%) "
+                        f"=> {estado}"
+                    )
+            if ok_count + warn_count > 0:
                 logger.info(
-                    f"  [{vid}] {name}: docs={_summary['cant_docs']} "
-                    f"total=${_summary['total_a_cobrar']:,.0f} "
-                    f"vencido=${_summary['total_vencido']:,.0f} ({_summary['pct_vencido']:.1f}%) "
-                    f"por_vencer=${_summary['total_por_vencer']:,.0f}"
+                    f"Cartera/Cobranza RECONCILIACION resumen: "
+                    f"{ok_count} vendedor(es) cuadran (<0.5%), "
+                    f"{warn_count} requieren revision."
                 )
         except Exception as _e:
             logger.warning(f"No se pudo loguear reconciliacion por vendedor: {_e}")
