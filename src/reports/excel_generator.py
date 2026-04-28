@@ -903,7 +903,7 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
 # ============================================================================
 
 COBRANZA_HEADERS = [
-    "DOCUMENTO", "FOLIO", "FECHA", "FECHA VCTO", "FECHA HOY",
+    "DOCUMENTO", "FOLIO", "FECHA", "FECHA VCTO", "ESTADO", "FECHA HOY",
     "DÍAS ATRASO", "CLIENTE", "CLIENTE RUT", "VENDEDOR", "POR PAGAR",
 ]
 
@@ -913,7 +913,17 @@ COBRANZA_ROJO = PatternFill(start_color="FFF4B7B7", end_color="FFF4B7B7", fill_t
 COBRANZA_GRIS_SUBTOTAL = PatternFill(start_color="FFD9D9D9", end_color="FFD9D9D9", fill_type="solid")
 COBRANZA_GRIS_TOTAL = PatternFill(start_color="FFA6A6A6", end_color="FFA6A6A6", fill_type="solid")
 
-NEGATIVO_FONT = Font(name="Calibri", size=11, color="FFC00000", bold=True)
+RESUMEN_TITLE_FILL = PatternFill(start_color="FF1F4E79", end_color="FF1F4E79", fill_type="solid")
+RESUMEN_TITLE_FONT = Font(name="Calibri", bold=True, size=12, color="FFFFFFFF")
+RESUMEN_LABEL_FONT = Font(name="Calibri", size=11, color="FF404040")
+RESUMEN_VALUE_FONT = Font(name="Calibri", bold=True, size=11, color="FF1F4E79")
+RESUMEN_TOTAL_FONT = Font(name="Calibri", bold=True, size=13, color="FF1F4E79")
+RESUMEN_FILL = PatternFill(start_color="FFEAF1F8", end_color="FFEAF1F8", fill_type="solid")
+
+NC_FONT = Font(name="Calibri", size=11, color="FFC00000", italic=True)
+ESTADO_VENCIDO_FONT = Font(name="Calibri", size=11, color="FFC00000", bold=True)
+ESTADO_PORVENCER_FONT = Font(name="Calibri", size=11, color="FF548235", bold=True)
+ESTADO_SINVCTO_FONT = Font(name="Calibri", size=11, color="FF7F7F7F", italic=True)
 SIN_VCTO_FONT = Font(name="Calibri", size=11, color="FF7F7F7F", italic=True)
 SUBTOTAL_FONT = Font(name="Calibri", size=11, bold=True)
 TOTAL_GENERAL_FONT = Font(name="Calibri", size=12, bold=True, color="FFFFFFFF")
@@ -931,11 +941,22 @@ def _semaforo_cobranza_fill(dias_atraso):
     return COBRANZA_ROJO
 
 
+def _estado_documento(fecha_vto, report_date):
+    """Estado del documento segun fecha de vencimiento vs fecha del reporte.
+    Retorna 'Vencido', 'Por vencer' o 'Sin vencimiento'."""
+    if fecha_vto is None:
+        return "Sin vencimiento"
+    if fecha_vto < report_date:
+        return "Vencido"
+    return "Por vencer"
+
+
 def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
     """Consulta y arma lista de dicts con datos por documento pendiente.
     Filtros: vendedor_id == vendedor_obuma_id, total_por_pagar > 0,
              tipo_documento in VALID_DOC_TYPES, no anuladas.
-    NCs: POR PAGAR negativo. Orden: cliente asc, dias_atraso desc."""
+    NCs: POR PAGAR positivo (igual que Obuma — NC pendiente es saldo a favor del cliente).
+    Orden: cliente asc, dias_atraso desc."""
     ventas = (
         db.query(VentaHistorico, ClienteFinal, Empleado)
         .outerjoin(ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id)
@@ -958,7 +979,12 @@ def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
 
         es_nc = venta.tipo_documento in NC_DOC_TYPES
         por_pagar_real = float(venta.total_por_pagar or 0)
-        por_pagar_signed = -por_pagar_real if es_nc else por_pagar_real
+        # NC: se mantiene POSITIVO (igual que Obuma "Facturas por Cobrar").
+        # El indicador visual de NC se muestra via tipo_documento + font italic rojo.
+
+        estado = _estado_documento(fecha_vto, report_date)
+        # Dias hasta/desde vencimiento (positivo = vencido, negativo = por vencer)
+        dias_vto = (report_date - fecha_vto).days if fecha_vto else None
 
         rows.append({
             "documento": venta.tipo_documento or "",
@@ -966,11 +992,13 @@ def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
             "fecha_emi": fecha_emi,
             "fecha_vto": fecha_vto,
             "dias_atraso": dias,
+            "dias_vto": dias_vto,
+            "estado": estado,
             "cliente_nombre": (cliente.nombre if cliente else None) or "(Sin cliente)",
             "cliente_rut": (cliente.rut if cliente else "") or "",
             "cliente_id": venta.cliente_id,
             "vendedor_nombre": (empleado.nombre if empleado else f"Vendedor {vendedor_obuma_id}"),
-            "por_pagar": por_pagar_signed,
+            "por_pagar": por_pagar_real,
             "es_nc": es_nc,
         })
 
@@ -982,18 +1010,145 @@ def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
     return rows
 
 
+# Definicion de rangos para el resumen (label, min_dias_vto, max_dias_vto)
+# dias_vto = report_date - fecha_vto
+# Vencido si dias_vto > 0, Por vencer si dias_vto <= 0
+RANGOS_RESUMEN = [
+    # Vencidos
+    ("Vencido > 90 días",       91,    None),
+    ("Vencido 61-90 días",      61,    90),
+    ("Vencido 31-60 días",      31,    60),
+    ("Vencido 1-30 días",       1,     30),
+    # Por vencer (dias_vto <= 0 -> abs)
+    ("Vence hoy",               0,     0),
+    ("Por vencer 1-30 días",    -30,   -1),
+    ("Por vencer 31-60 días",   -60,   -31),
+    ("Por vencer 61-90 días",   -90,   -61),
+    ("Por vencer > 90 días",    None,  -91),
+]
+
+
+def _build_cobranza_summary(rows, report_date):
+    """Calcula resumen de cartera estilo Obuma.
+    Retorna dict con totales, vencido/no vencido, y distribución por rangos."""
+    total_a_cobrar = sum(r["por_pagar"] for r in rows)
+    total_vencido = sum(r["por_pagar"] for r in rows if r["estado"] == "Vencido")
+    total_por_vencer = sum(r["por_pagar"] for r in rows if r["estado"] == "Por vencer")
+    total_sin_vcto = sum(r["por_pagar"] for r in rows if r["estado"] == "Sin vencimiento")
+
+    pct_vencido = (total_vencido / total_a_cobrar * 100) if total_a_cobrar > 0 else 0
+    pct_por_vencer = (total_por_vencer / total_a_cobrar * 100) if total_a_cobrar > 0 else 0
+    pct_sin_vcto = (total_sin_vcto / total_a_cobrar * 100) if total_a_cobrar > 0 else 0
+
+    # Distribución por rango de dias_vto
+    distribucion = []
+    for label, dmin, dmax in RANGOS_RESUMEN:
+        monto = 0.0
+        cant = 0
+        for r in rows:
+            d = r["dias_vto"]
+            if d is None:
+                continue
+            ok_min = (dmin is None) or (d >= dmin)
+            ok_max = (dmax is None) or (d <= dmax)
+            if ok_min and ok_max:
+                monto += r["por_pagar"]
+                cant += 1
+        pct = (monto / total_a_cobrar * 100) if total_a_cobrar > 0 else 0
+        distribucion.append({"label": label, "monto": monto, "pct": pct, "cant": cant})
+
+    # Sin vencimiento (ultimo bloque)
+    cant_sin_vcto = sum(1 for r in rows if r["estado"] == "Sin vencimiento")
+    distribucion.append({
+        "label": "Sin vencimiento",
+        "monto": total_sin_vcto,
+        "pct": pct_sin_vcto,
+        "cant": cant_sin_vcto,
+    })
+
+    return {
+        "total_a_cobrar": total_a_cobrar,
+        "total_vencido": total_vencido,
+        "total_por_vencer": total_por_vencer,
+        "total_sin_vcto": total_sin_vcto,
+        "pct_vencido": pct_vencido,
+        "pct_por_vencer": pct_por_vencer,
+        "pct_sin_vcto": pct_sin_vcto,
+        "distribucion": distribucion,
+        "cant_docs": len(rows),
+    }
+
+
+def _sync_for_cartera_report(db) -> dict:
+    """Ejecuta sync de ventas + ventas_items_incremental(YYYY-01-01..hoy) + clientes.
+    Retorna dict con resultados. Levanta RuntimeError si algun sync falla.
+    Esto garantiza que el reporte de cartera refleje las facturas emitidas hoy.
+    """
+    import asyncio
+    import time
+    from datetime import date as _date
+    from src.etl.sync_service import SyncService
+
+    today = _date.today()
+    fecha_desde = _date(today.year, 1, 1).strftime("%Y-%m-%d")
+    fecha_hasta = today.strftime("%Y-%m-%d")
+
+    service = SyncService(db)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    results = {}
+    t0 = time.time()
+    try:
+        logger.info("Cartera/Cobranza: iniciando sync inmediato (clientes + ventas + ventas_items)...")
+
+        t = time.time()
+        results["clientes"] = loop.run_until_complete(service.sync_clientes())
+        if isinstance(results["clientes"], dict) and "error" in results["clientes"]:
+            raise RuntimeError(f"sync_clientes falló: {results['clientes'].get('error')}")
+        logger.info(f"Cartera sync clientes: {results['clientes'].get('synced', '?')} regs en {time.time()-t:.1f}s")
+
+        t = time.time()
+        results["ventas"] = loop.run_until_complete(service.sync_ventas())
+        if isinstance(results["ventas"], dict) and "error" in results["ventas"]:
+            raise RuntimeError(f"sync_ventas falló: {results['ventas'].get('error')}")
+        logger.info(f"Cartera sync ventas: {results['ventas'].get('synced', '?')} regs en {time.time()-t:.1f}s")
+
+        t = time.time()
+        results["ventas_items"] = loop.run_until_complete(
+            service.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
+        )
+        if isinstance(results["ventas_items"], dict) and "error" in results["ventas_items"]:
+            raise RuntimeError(f"sync_ventas_items_incremental falló: {results['ventas_items'].get('error')}")
+        logger.info(
+            f"Cartera sync ventas_items {fecha_desde}..{fecha_hasta}: "
+            f"{results['ventas_items'].get('synced', '?')} items en {time.time()-t:.1f}s"
+        )
+
+        logger.info(f"Cartera sync inmediato OK en {time.time()-t0:.1f}s totales")
+        return results
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
+
+
 def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date: date = None):
     """Genera Excel de cartera/cobranza para UN vendedor.
 
     Retorna filepath del Excel generado, o None si el vendedor no tiene
     documentos pendientes (en cuyo caso no se debe enviar email).
 
-    Estructura: 1 hoja con columnas DOCUMENTO, FOLIO, FECHA, FECHA VCTO,
-    FECHA HOY, DÍAS ATRASO, CLIENTE, CLIENTE RUT, VENDEDOR, POR PAGAR.
-    Agrupado por cliente con subtotal en gris + TOTAL GENERAL al final.
-    Semaforo por dias desde emision: 30-45 verde, 46-60 naranja, 61+ rojo.
-    NCs: fila con POR PAGAR negativo en rojo (resta del saldo).
-    Sin vencimiento: texto 'Sin vencimiento' en gris cursiva.
+    Estructura:
+    - Bloque RESUMEN al inicio: total a cobrar, vencido, no vencido,
+      sin vencimiento y distribución por rangos de días desde vencimiento.
+    - Detalle: columnas DOCUMENTO, FOLIO, FECHA, FECHA VCTO, ESTADO,
+      FECHA HOY, DÍAS ATRASO, CLIENTE, CLIENTE RUT, VENDEDOR, POR PAGAR.
+    - Agrupado por cliente con subtotal en gris + TOTAL GENERAL al final.
+    - Semaforo por dias desde emision: 30-45 verde, 46-60 naranja, 61+ rojo.
+    - NCs: POR PAGAR positivo (igual que Obuma), font italic rojo como indicador.
+    - Sin vencimiento: texto en gris cursiva.
+    - Total = suma directa de POR PAGAR (sin restar adicional las NCs).
     """
     if report_date is None:
         report_date = date.today()
@@ -1012,48 +1167,154 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
     )
     vendedor_nombre = (empleado.nombre if empleado else rows[0]["vendedor_nombre"]) or f"Vendedor {vendedor_obuma_id}"
 
+    summary = _build_cobranza_summary(rows, report_date)
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Cartera Cobranza"
 
+    n_cols = len(COBRANZA_HEADERS)  # 11
+
     # Titulo
     ws.cell(row=1, column=1, value=f"Reporte Cartera Cobranza - {vendedor_nombre}").font = TITLE_FONT
     ws.cell(row=2, column=1, value=f"Fecha reporte: {report_date.strftime('%d/%m/%Y')}").font = SUBTITLE_FONT
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COBRANZA_HEADERS))
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(COBRANZA_HEADERS))
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_cols)
 
-    header_row = 4
+    # ── BLOQUE RESUMEN ──
+    def _section_header(row, text):
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cols)
+        c = ws.cell(row=row, column=1, value=text)
+        c.font = RESUMEN_TITLE_FONT
+        c.fill = RESUMEN_TITLE_FILL
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.row_dimensions[row].height = 22
+
+    def _kpi_row(row, label, monto, pct=None, total_font=False, bg_fill=None):
+        # Layout: cols 1-4 label, cols 5-7 monto, cols 8-11 pct
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        ws.merge_cells(start_row=row, start_column=5, end_row=row, end_column=7)
+        ws.merge_cells(start_row=row, start_column=8, end_row=row, end_column=n_cols)
+        c_label = ws.cell(row=row, column=1, value=label)
+        c_monto = ws.cell(row=row, column=5, value=monto)
+        c_pct = ws.cell(row=row, column=8, value=(f"{pct:.1f}%" if pct is not None else ""))
+        c_label.font = RESUMEN_TOTAL_FONT if total_font else RESUMEN_LABEL_FONT
+        c_monto.font = RESUMEN_TOTAL_FONT if total_font else RESUMEN_VALUE_FONT
+        c_pct.font = RESUMEN_TOTAL_FONT if total_font else RESUMEN_VALUE_FONT
+        c_monto.number_format = CURRENCY_FORMAT
+        c_label.alignment = Alignment(horizontal="left", indent=1)
+        c_monto.alignment = Alignment(horizontal="right")
+        c_pct.alignment = Alignment(horizontal="right", indent=1)
+        if bg_fill is not None:
+            for col in range(1, n_cols + 1):
+                ws.cell(row=row, column=col).fill = bg_fill
+
+    rcur = 4
+    _section_header(rcur, "RESUMEN CARTERA")
+    rcur += 1
+    _kpi_row(rcur, f"Total ventas a cobrar ({summary['cant_docs']} docs)",
+             summary["total_a_cobrar"], None, total_font=True, bg_fill=RESUMEN_FILL)
+    rcur += 1
+    _kpi_row(rcur, "  Total vencido", summary["total_vencido"], summary["pct_vencido"])
+    rcur += 1
+    _kpi_row(rcur, "  Total no vencido (por vencer)", summary["total_por_vencer"], summary["pct_por_vencer"])
+    rcur += 1
+    _kpi_row(rcur, "  Sin fecha de vencimiento", summary["total_sin_vcto"], summary["pct_sin_vcto"])
+    rcur += 2
+
+    # ── DISTRIBUCIÓN POR RANGOS ──
+    _section_header(rcur, "DISTRIBUCIÓN POR DÍAS DE VENCIMIENTO")
+    rcur += 1
+    # Header table: col1-4 Rango, col5 Docs, col6-8 Monto, col9-11 %
+    ws.merge_cells(start_row=rcur, start_column=1, end_row=rcur, end_column=4)
+    ws.merge_cells(start_row=rcur, start_column=6, end_row=rcur, end_column=8)
+    ws.merge_cells(start_row=rcur, start_column=9, end_row=rcur, end_column=n_cols)
+    headers_dist = [(1, "Rango"), (5, "Docs"), (6, "Monto"), (9, "% del Total")]
+    # Aplicar fill, font y border a todas las celdas del header
+    for col in range(1, n_cols + 1):
+        cell = ws.cell(row=rcur, column=col)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.border = THIN_BORDER
+    for col, txt in headers_dist:
+        c = ws.cell(row=rcur, column=col, value=txt)
+        c.alignment = HEADER_ALIGNMENT
+    rcur += 1
+
+    for d in summary["distribucion"]:
+        ws.merge_cells(start_row=rcur, start_column=1, end_row=rcur, end_column=4)
+        ws.merge_cells(start_row=rcur, start_column=6, end_row=rcur, end_column=8)
+        ws.merge_cells(start_row=rcur, start_column=9, end_row=rcur, end_column=n_cols)
+        c_lbl = ws.cell(row=rcur, column=1, value=d["label"])
+        c_cnt = ws.cell(row=rcur, column=5, value=d["cant"])
+        c_mon = ws.cell(row=rcur, column=6, value=d["monto"])
+        c_pct = ws.cell(row=rcur, column=9, value=f"{d['pct']:.1f}%")
+        c_lbl.alignment = Alignment(horizontal="left", indent=1)
+        c_cnt.alignment = Alignment(horizontal="center")
+        c_mon.alignment = Alignment(horizontal="right")
+        c_pct.alignment = Alignment(horizontal="right", indent=1)
+        c_mon.number_format = CURRENCY_FORMAT
+        # Coloreado segun tipo
+        lbl = d["label"]
+        if "Vencido" in lbl and "Por vencer" not in lbl:
+            for col in range(1, n_cols + 1):
+                ws.cell(row=rcur, column=col).fill = COBRANZA_ROJO if "> 90" in lbl or "61-90" in lbl else (
+                    COBRANZA_NARANJA if "31-60" in lbl else COBRANZA_VERDE
+                )
+        elif lbl == "Vence hoy":
+            for col in range(1, n_cols + 1):
+                ws.cell(row=rcur, column=col).fill = COBRANZA_NARANJA
+        elif lbl == "Sin vencimiento":
+            for col in range(1, n_cols + 1):
+                ws.cell(row=rcur, column=col).fill = COBRANZA_GRIS_SUBTOTAL
+        for col in range(1, n_cols + 1):
+            ws.cell(row=rcur, column=col).border = THIN_BORDER
+        rcur += 1
+
+    rcur += 2
+
+    # ── DETALLE POR DOCUMENTO ──
+    _section_header(rcur, "DETALLE POR DOCUMENTO")
+    rcur += 1
+    header_row = rcur
     for i, h in enumerate(COBRANZA_HEADERS, 1):
         ws.cell(row=header_row, column=i, value=h)
-    _style_header(ws, header_row, len(COBRANZA_HEADERS))
+    _style_header(ws, header_row, n_cols)
 
     current_row = header_row + 1
     current_cliente = None
     cliente_subtotal = 0.0
-    cliente_subtotal_start_row = current_row
     grand_total = 0.0
 
-    def _flush_cliente_subtotal(end_row):
+    # Indices de columna (1-based) tras agregar ESTADO en posición 5
+    COL_FECHA_EMI = 3
+    COL_FECHA_VTO = 4
+    COL_ESTADO = 5
+    COL_FECHA_HOY = 6
+    COL_DIAS_ATRASO = 7
+    COL_VENDEDOR = 10
+    COL_POR_PAGAR = 11
+
+    def _flush_cliente_subtotal():
         """Escribe fila de subtotal para el cliente recien terminado."""
         nonlocal current_row
         if current_cliente is None:
             return
-        for col in range(1, len(COBRANZA_HEADERS) + 1):
+        for col in range(1, n_cols + 1):
             cell = ws.cell(row=current_row, column=col)
             cell.fill = COBRANZA_GRIS_SUBTOTAL
             cell.border = THIN_BORDER
             cell.font = SUBTOTAL_FONT
-        ws.cell(row=current_row, column=9, value=f"Subtotal {current_cliente}").alignment = Alignment(horizontal="right")
-        cell_sub = ws.cell(row=current_row, column=10, value=cliente_subtotal)
+        ws.cell(row=current_row, column=COL_VENDEDOR, value=f"Subtotal {current_cliente}").alignment = Alignment(horizontal="right")
+        cell_sub = ws.cell(row=current_row, column=COL_POR_PAGAR, value=cliente_subtotal)
         cell_sub.number_format = CURRENCY_FORMAT
         current_row += 1
 
     for r in rows:
         # Cambio de cliente -> escribir subtotal del anterior
         if current_cliente is not None and r["cliente_nombre"] != current_cliente:
-            _flush_cliente_subtotal(current_row - 1)
+            _flush_cliente_subtotal()
             cliente_subtotal = 0.0
-            cliente_subtotal_start_row = current_row
 
         if current_cliente != r["cliente_nombre"]:
             current_cliente = r["cliente_nombre"]
@@ -1065,6 +1326,7 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
             r["folio"],
             r["fecha_emi"].strftime("%d-%m-%Y") if r["fecha_emi"] else "",
             r["fecha_vto"].strftime("%d-%m-%Y") if r["fecha_vto"] else "Sin vencimiento",
+            r["estado"],
             report_date.strftime("%d-%m-%Y"),
             r["dias_atraso"] if r["dias_atraso"] is not None else "",
             r["cliente_nombre"],
@@ -1077,16 +1339,25 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
             cell.border = THIN_BORDER
             if fila_fill is not None:
                 cell.fill = fila_fill
-            # Sin vencimiento estilizado
-            if i == 4 and val == "Sin vencimiento":
+            # FECHA VCTO "Sin vencimiento" estilizado
+            if i == COL_FECHA_VTO and val == "Sin vencimiento":
                 cell.font = SIN_VCTO_FONT
+            # ESTADO con coloreado segun valor
+            if i == COL_ESTADO:
+                cell.alignment = Alignment(horizontal="center")
+                if val == "Vencido":
+                    cell.font = ESTADO_VENCIDO_FONT
+                elif val == "Por vencer":
+                    cell.font = ESTADO_PORVENCER_FONT
+                else:
+                    cell.font = ESTADO_SINVCTO_FONT
             # POR PAGAR formato moneda
-            if i == 10:
+            if i == COL_POR_PAGAR:
                 cell.number_format = CURRENCY_FORMAT
                 if r["es_nc"]:
-                    cell.font = NEGATIVO_FONT
+                    cell.font = NC_FONT
             # Centrar columnas de fechas y dias
-            if i in (3, 4, 5, 6):
+            if i in (COL_FECHA_EMI, COL_FECHA_VTO, COL_FECHA_HOY, COL_DIAS_ATRASO):
                 cell.alignment = Alignment(horizontal="center")
 
         cliente_subtotal += r["por_pagar"]
@@ -1094,28 +1365,28 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
         current_row += 1
 
     # Subtotal del ultimo cliente
-    _flush_cliente_subtotal(current_row - 1)
+    _flush_cliente_subtotal()
 
     # Fila TOTAL GENERAL
     current_row += 1
-    for col in range(1, len(COBRANZA_HEADERS) + 1):
+    for col in range(1, n_cols + 1):
         cell = ws.cell(row=current_row, column=col)
         cell.fill = COBRANZA_GRIS_TOTAL
         cell.border = THIN_BORDER
         cell.font = TOTAL_GENERAL_FONT
-    ws.cell(row=current_row, column=9, value="TOTAL GENERAL").alignment = Alignment(horizontal="right")
-    cell_total = ws.cell(row=current_row, column=10, value=grand_total)
+    ws.cell(row=current_row, column=COL_VENDEDOR, value="TOTAL GENERAL").alignment = Alignment(horizontal="right")
+    cell_total = ws.cell(row=current_row, column=COL_POR_PAGAR, value=grand_total)
     cell_total.number_format = CURRENCY_FORMAT
     cell_total.font = TOTAL_GENERAL_FONT
     cell_total.fill = COBRANZA_GRIS_TOTAL
 
-    # Anchos de columna
-    col_widths = [16, 10, 12, 14, 12, 12, 38, 14, 24, 16]
+    # Anchos de columna (11 columnas)
+    col_widths = [16, 10, 12, 14, 14, 12, 12, 38, 14, 24, 16]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    # Freeze panes (fija header + titulo)
-    ws.freeze_panes = "A5"
+    # Freeze panes (fija desde fin de header de detalle)
+    ws.freeze_panes = ws.cell(row=header_row + 1, column=1).coordinate
 
     os.makedirs("reports", exist_ok=True)
     safe_name = (vendedor_nombre or f"vendedor_{vendedor_obuma_id}").replace(" ", "_").replace("/", "_")
@@ -1142,13 +1413,33 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
     return filepath
 
 
-def generate_all_cartera_cobranza_reports(db: Session, report_date: date = None):
+def generate_all_cartera_cobranza_reports(db: Session, report_date: date = None, do_sync: bool = True):
     """Genera reportes de cartera/cobranza para TODOS los vendedores trackeados.
+
+    Args:
+        db: Session DB.
+        report_date: fecha del reporte (default hoy).
+        do_sync: si True (default), ejecuta sync inmediato (ventas + ventas_items
+                 incremental año actual + clientes) antes de generar el Excel,
+                 para que las facturas emitidas hoy aparezcan. Si el sync falla,
+                 ABORTA la generación (no se envían reportes con datos viejos).
+
     Vendedores sin saldo pendiente son omitidos (no se genera Excel).
     Retorna lista de tuplas (vendedor_obuma_id, filepath_o_None).
     """
     if report_date is None:
         report_date = date.today()
+
+    if do_sync:
+        try:
+            _sync_for_cartera_report(db)
+        except Exception as e:
+            logger.error(
+                f"Cartera/Cobranza ABORTADO: sync inmediato falló ({e}). "
+                f"No se generan reportes para evitar enviar datos desactualizados.",
+                exc_info=True,
+            )
+            return []
 
     tracked_ids = ['28856', '28886', '28887', '28891', '28892']
     results = []
