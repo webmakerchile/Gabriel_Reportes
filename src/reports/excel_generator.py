@@ -1125,12 +1125,75 @@ def _sync_for_cartera_report(db) -> dict:
         )
 
         logger.info(f"Cartera sync inmediato OK en {time.time()-t0:.1f}s totales")
+
+        # Reconciliacion: log totales por vendedor trackeado para auditar contra Obuma
+        try:
+            tracked = [
+                ("28856", "Gabriel"),
+                ("28886", "Jhonatan"),
+                ("28887", "Ernesto"),
+                ("28891", "Pablo"),
+                ("28892", "Jesus"),
+            ]
+            logger.info("Cartera/Cobranza RECONCILIACION (post-sync, comparar contra pantalla 'Facturas por Cobrar' de Obuma):")
+            for vid, name in tracked:
+                _rows = _build_cobranza_rows(db, vid, today)
+                _summary = _build_cobranza_summary(_rows, today)
+                logger.info(
+                    f"  [{vid}] {name}: docs={_summary['cant_docs']} "
+                    f"total=${_summary['total_a_cobrar']:,.0f} "
+                    f"vencido=${_summary['total_vencido']:,.0f} ({_summary['pct_vencido']:.1f}%) "
+                    f"por_vencer=${_summary['total_por_vencer']:,.0f}"
+                )
+        except Exception as _e:
+            logger.warning(f"No se pudo loguear reconciliacion por vendedor: {_e}")
+
         return results
     finally:
         try:
             loop.close()
         except Exception:
             pass
+
+
+def _check_cartera_data_freshness(db, max_hours: float = 2.0) -> None:
+    """Logea WARNING si la ultima sincronizacion de Ventas tiene mas de
+    max_hours horas. Cubre el caso en que alguien llame
+    generate_cartera_cobranza_report directamente bypaseando el batch
+    wrapper que hace sync inmediato.
+    """
+    try:
+        from datetime import datetime, timedelta
+        from src.models.models import ObumaApiEndpoint
+        ep = (
+            db.query(ObumaApiEndpoint)
+            .filter(ObumaApiEndpoint.nombre.ilike("%Ventas%"))
+            .filter(~ObumaApiEndpoint.nombre.ilike("%Cobros%"))
+            .filter(~ObumaApiEndpoint.nombre.ilike("%Cotizaciones%"))
+            .filter(~ObumaApiEndpoint.nombre.ilike("%>%"))
+            .filter(ObumaApiEndpoint.ultima_sync.isnot(None))
+            .order_by(ObumaApiEndpoint.ultima_sync.desc())
+            .first()
+        )
+        if ep is None or ep.ultima_sync is None:
+            logger.warning(
+                "Cartera: no hay registro de ultima sincronizacion de Ventas. "
+                "El reporte puede contener datos desactualizados."
+            )
+            return
+        # ultima_sync se almacena con datetime.now() (hora local del server,
+        # configurada como America/Santiago). Comparamos con la misma convencion
+        # para evitar offset por timezone.
+        age = datetime.now() - ep.ultima_sync
+        if age > timedelta(hours=max_hours):
+            logger.warning(
+                f"Cartera: la ultima sincronizacion de Ventas tiene "
+                f"{age.total_seconds()/3600:.1f}h (>{max_hours}h). "
+                f"El reporte puede no incluir facturas emitidas hoy. "
+                f"Recomendado: generar via generate_all_cartera_cobranza_reports(do_sync=True)."
+            )
+    except Exception as _e:
+        logger.debug(f"No se pudo verificar staleness de cartera: {_e}")
 
 
 def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date: date = None):
@@ -1152,6 +1215,11 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
     """
     if report_date is None:
         report_date = date.today()
+
+    # Si esta funcion se llama directamente (sin pasar por
+    # generate_all_cartera_cobranza_reports que hace sync inmediato),
+    # avisar si los datos pueden estar desactualizados.
+    _check_cartera_data_freshness(db)
 
     vendedor_obuma_id = str(vendedor_obuma_id)
     rows = _build_cobranza_rows(db, vendedor_obuma_id, report_date)

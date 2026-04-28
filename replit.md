@@ -1,41 +1,82 @@
 # BI Platform - Gabriel Hoyos
 
 ## Overview
-This project is a Business Intelligence platform designed for Gabriel Hoyos, who manages multiple clients using the Obuma ERP system. The platform's primary purpose is to audit and report on the profitability of operations. It aims to provide comprehensive insights into sales, costs, and client performance, enabling better decision-making and operational efficiency.
+Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de múltiples clientes en el ERP Obuma. Audita y reporta rentabilidad, ventas, costos y desempeño de los 5 vendedores trackeados, generando reportes Excel automatizados y un dashboard web.
 
 ## User Preferences
-I prefer that the agent prioritize the creation and refinement of Excel reports, especially ensuring their accuracy and timely generation. The system should guarantee that all data used for reporting, particularly for cartera/cobranza reports, is up-to-date by performing an immediate synchronization before report generation. I expect "Nota Credito" amounts to be handled specifically by being subtracted from totals in all calculations and reports, not added. I also require strict adherence to document type filtering to exclude "Tipo 4" documents (pre-invoices) from all sales analyses.
+- Priorizar la **exactitud y puntualidad de los reportes Excel**.
+- Para reportes de **cartera/cobranza** se exige sincronización inmediata antes de generar (los datos del día deben estar incluidos).
+- **Manejo de "Nota Crédito" depende del tipo de reporte** (ver sección CRITICAL más abajo). NO aplicar una sola regla universal.
+- **Excluir documentos "Tipo 4"** (pre-facturas) de todo análisis de ventas. Solo se aceptan los `VALID_DOC_TYPES`: Factura Electr., Boleta Electr., Nota Crédito.
 
 ## System Architecture
-The platform features a multi-tenant architecture with a clear separation of concerns.
 
-**UI/UX Decisions:**
-- The frontend is built with Streamlit, providing an interactive dashboard experience.
-- Excel reports are generated using `openpyxl`, ensuring a professional and consistent format with specific styling guidelines (e.g., yellow fill for zero cells, green fill for ABC segments, blue/white headers).
-- Dashboard sections include a global filter for dates and vendors, displaying KPIs, interactive charts for sales, profitability, collections, and top products.
+**Stack**
+- **Backend**: FastAPI (puerto 8000)
+- **Frontend**: Streamlit (puerto 5000)
+- **DB**: PostgreSQL (single source of truth, 28 modelos, multi-tenant)
+- **ETL**: módulo Python que consume API Obuma (21 endpoints sincronizando)
+- **Scheduler**: APScheduler — sync diario 18:30 hora Chile + reportes automáticos (lunes-jueves 20:30, viernes 23:00)
+- **Reports**: `src/reports/excel_generator.py` (openpyxl) + `src/reports/email_service.py` (Resend, `EMAIL_FROM=reportes@autoreportes.cl`)
 
-**Technical Implementations:**
-- **Backend:** FastAPI handles all business logic and API endpoints.
-- **Frontend:** Streamlit serves as the interactive dashboard.
-- **Database:** PostgreSQL acts as the single source of truth, storing historical data and comprehensive Obuma information across 28 models, including multi-tenant support via the `Tenant` model.
-- **ETL:** A Python module is responsible for consuming the Obuma API, synchronizing 23 endpoints automatically.
-- **Scheduler:** APScheduler manages daily data synchronization at 18:30 (Chile time) for core entities (clients, sales, etc.) and automated report generation (daily Mon-Thu 20:30, weekly Fri 23:00 Chile time).
-- **Reports:** `excel_generator.py` module is dedicated to creating professional Excel reports, including specialized vendor reports with ABC segmentation, risk levels, and custom date ranges.
-- **Document Type Filtering:** A critical system-wide rule mandates filtering sales data to include only `VALID_DOC_TYPES` (e.g., 'Factura Electr.', 'Boleta Electr.', 'Nota Credito') and exclude 'Tipo 4'. 'Nota Credito' amounts are always subtracted. This is enforced in `excel_generator.py` and `dashboard/app.py`.
-- **Vendedor Mapping:** For client assignment (cartera), `ClienteFinal.data_json.rel_usuario_id` is used. For individual sales, `VentaHistorico.vendedor_id` is used, which maps to `detalle.rel_vendedor_id` from the raw Obuma JSON.
-- **Cartera Auto-Population:** `VendedorCartera` is automatically populated from `ClienteFinal.data_json.rel_usuario_id` during client synchronization, focusing on specific tracked vendors.
-- **Reporte Cartera/Cobranza Logic:** Reports trigger an immediate sync of `clientes`, `ventas`, and `ventas_items_incremental` to ensure data freshness. `NCs` are handled by displaying `total_por_pagar` as positive, matching Obuma's display. Filters applied include `vendedor_id`, `tipo_documento`, `total_por_pagar > 0`, and `anulada == False`. Reports include summary blocks, distribution by due days, and detailed breakdowns with traffic light indicators based on emission date.
-- **Vendedor Tracking:** Support for tracking 5 specific vendors, including their monthly targets for 'Repuestos' and 'Maquinaria'. Product classification (Maquinaria vs. Repuestos) is based on SKU prefixes.
+**Estilos Excel**: amarillo en celdas en cero, verde en segmento ABC, encabezados azul/blanco.
 
-**Feature Specifications:**
-- **Complete ETL:** Synchronization of 21 active Obuma endpoints.
-- **Historical Tables:** `ventas_historico`, `costos_historico`, `compras_historico`.
-- **Net Margin Calculation:** Cross-referencing sales with acquisition costs.
-- **Audit Capabilities:** Comparison of API totals versus PostgreSQL data.
-- **API Catalog:** A database record of 30 Obuma API endpoints for automated processes.
-- **Data JSON Storage:** Raw API responses are stored in `data_json` for each model.
+**Dashboard**: filtros globales (fechas, vendedor), KPIs, gráficos de ventas/rentabilidad/cobranza/top productos.
+
+## CRITICAL: Manejo de Nota Crédito (NC) por tipo de reporte
+
+**Las NC se tratan distinto según el reporte. Esto NO es contradicción — refleja cómo Obuma las muestra en cada pantalla.**
+
+### En reportes de VENTAS / MARGEN / DASHBOARD (vendedor mensual, top productos, KPIs)
+- Las NC **se restan** de los totales de venta (representan devoluciones / anulaciones de ingresos).
+- Implementado en `excel_generator.py` (reportes de vendedor) y `dashboard/app.py` filtrando por `VALID_DOC_TYPES` y aplicando signo negativo a NC.
+
+### En reporte CARTERA / COBRANZA (Facturas por Cobrar)
+- Las NC **se muestran POSITIVAS** en la columna POR PAGAR, exactamente como aparecen en la pantalla "Facturas por Cobrar" de Obuma.
+- Razón: el campo `total_por_pagar` que devuelve Obuma para una NC pendiente ya representa el saldo a favor del cliente; restarla de nuevo sería doble conteo.
+- El TOTAL GENERAL del reporte = suma directa de la columna POR PAGAR (sin negar NCs).
+- Visualmente las NCs se distinguen con font italic rojo (NC_FONT) en la fila para que el usuario las identifique sin confundir el valor.
+
+## CRITICAL: Reporte Cartera/Cobranza
+
+- **Sync inmediato antes de generar** (`generate_all_cartera_cobranza_reports(db, do_sync=True)`):
+  - Ejecuta sync de `clientes` + `ventas` + `ventas_items_incremental(YYYY-01-01..hoy)` ANTES de generar cualquier Excel.
+  - Si el sync falla → ABORTA la generación (return `[]`) para no enviar datos viejos.
+  - Tras el sync, registra en logs el cuadre de los 5 vendedores trackeados (totales y % vencido) para auditar contra Obuma.
+- **Detección de staleness en path por-vendedor** (`generate_cartera_cobranza_report`):
+  - Si la última sincronización de `Ventas` en `ObumaApiEndpoint.ultima_sync` tiene > 2 horas, emite WARNING en logs (la entrada batch normal hace sync inmediato; este check solo cubre llamadas directas que pudieran bypassear el batch).
+- **Filtros**: `vendedor_id`, `tipo_documento ∈ VALID_DOC_TYPES`, `total_por_pagar > 0`, `anulada == False`.
+- **Estructura Excel**:
+  1. **RESUMEN**: total a cobrar (#docs), total vencido (con %), total no vencido (con %), sin vencimiento.
+  2. **DISTRIBUCIÓN POR DÍAS DE VENCIMIENTO**: rangos Vencido >90 / 61-90 / 31-60 / 1-30, Vence hoy, Por vencer 1-30 / 31-60 / 61-90 / >90, Sin vencimiento. Cada fila: cantidad, monto, % del total. Coloreado por criticidad.
+  3. **DETALLE** (11 columnas): DOCUMENTO, FOLIO, FECHA, FECHA VCTO, ESTADO (Vencido/Por vencer/Sin vencimiento), FECHA HOY, DÍAS ATRASO, CLIENTE, CLIENTE RUT, VENDEDOR, POR PAGAR. Agrupado por cliente con subtotal gris + TOTAL GENERAL final.
+- **Semáforo del DETALLE** (color de fila): días desde **EMISIÓN**. <30 sin color, 30-45 verde, 46-60 naranja, 61+ rojo. (Gabriel pidió mantener este criterio aunque el ESTADO se calcule por vencimiento.)
+
+## CRITICAL: Mapeo de vendedor (regla central)
+- **Para CARTERA (asignación de cliente)**: usar `ClienteFinal.data_json.rel_usuario_id`. Auto-poblado en `VendedorCartera` durante `sync_clientes` para los 5 vendedores trackeados.
+- **Para VENTAS individuales (facturas, boletas, NCs)**: usar `VentaHistorico.vendedor_id` (columna BD), que mapea a `detalle.rel_vendedor_id` en el JSON crudo de Obuma. Es el vendedor REAL del documento (NO `rel_usuario_id`, que es quien creó el documento — cajero/operador).
+- Verificación: 30 registros aleatorios → coincidencia 30/30.
+
+## Vendedores trackeados (5)
+| Obuma ID | Nombre   | Metas mensuales (Repuestos / Maquinaria) |
+|----------|----------|------------------------------------------|
+| 28856    | Gabriel  | configuradas en `VendedorMeta`           |
+| 28886    | Jhonatan | configuradas en `VendedorMeta`           |
+| 28887    | Ernesto  | configuradas en `VendedorMeta`           |
+| 28891    | Pablo    | configuradas en `VendedorMeta`           |
+| 28892    | Jesús    | configuradas en `VendedorMeta`           |
+
+Clasificación de producto (Maquinaria vs Repuestos): por prefijo de SKU.
+
+## Feature Specifications
+- ETL completo: 21 endpoints activos de Obuma.
+- Tablas históricas: `ventas_historico`, `costos_historico`, `compras_historico`.
+- Cálculo de margen neto: cruce ventas × costos de adquisición.
+- Auditoría: comparación totales API vs PostgreSQL.
+- Catálogo API: 30 endpoints registrados en `ObumaApiEndpoint` para procesos automatizados.
+- Almacenamiento JSON crudo: campo `data_json` en cada modelo.
 
 ## External Dependencies
-- **Obuma ERP API:** The core data source, accessed via `OBUMA_API_KEY` and `OBUMA_BASE_URL`.
-- **PostgreSQL:** The primary database for all stored data.
-- **Resend:** Email service for sending automated reports, configured with `RESEND_API_KEY` and a verified `EMAIL_FROM` address (`reportes@autoreportes.cl`).
+- **Obuma ERP API**: `OBUMA_API_KEY`, `OBUMA_BASE_URL`.
+- **PostgreSQL**: BD primaria.
+- **Resend**: envío de correos (`RESEND_API_KEY`, `EMAIL_FROM=reportes@autoreportes.cl`).
