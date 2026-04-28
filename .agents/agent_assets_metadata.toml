@@ -5,4 +5,28 @@ generated = []
 id = "ALJpxquPCEozQMTSNOx43"
 uri = "file://reports/cartera_cobranza_Gabriel_Jaime_Hoyos_Guzman_20260427.xlsx"
 type = "table"
-title = "Cartera Cobranza - Gabriel Hoyos (prueba 27/04/2026)"
+title = "Cartera Gabriel - 27/04/2026"
+
+[[outputs]]
+id = "aWRFq1Gwrm7HRd-sv1Qoo"
+uri = "file://reports/cartera_cobranza_Jhonatan_Jose_Ruiz_Valera_20260427.xlsx"
+type = "table"
+title = "Cartera Jhonatan - 27/04/2026"
+
+[[outputs]]
+id = "i6-rhu-rqC5sq1Yxltc61"
+uri = "file://reports/cartera_cobranza_Ernesto_Antonio_Quintiliani_Gutiérrez_20260427.xlsx"
+type = "table"
+title = "Cartera Ernesto - 27/04/2026"
+
+[[outputs]]
+id = "yQ-7P0jZTKK-THdHfPy5L"
+uri = "file://reports/cartera_cobranza_Pablo_Vicente_Pinto_Rico_20260427.xlsx"
+type = "table"
+title = "Cartera Pablo - 27/04/2026"
+
+[[outputs]]
+id = "UCWTRZDBG4k6w5CQ4cAhW"
+uri = "file://reports/cartera_cobranza_Jesus_Ernesto_Gonzalez_Gimenez_20260427.xlsx"
+type = "table"
+title = "Cartera Jesus - 27/04/2026"
