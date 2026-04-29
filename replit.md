@@ -51,7 +51,7 @@ Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de
 Política unificada para que Gabriel nunca reciba un correo con datos parciales o desactualizados:
 
 - **Helpers compartidos en `src/reports/excel_generator.py`**:
-  - `sync_for_report(db, scope)`: ejecuta `sync_clientes` → `sync_ventas` → `sync_ventas_items_incremental(YYYY-01-01..hoy)` → `sync_ventas_cobros`. Levanta `RuntimeError` si los 3 primeros fallan; cobros es non-blocking (warn).
+  - `sync_for_report(db, scope)`: ejecuta `sync_clientes` → `sync_ventas` → `sync_ventas_items_incremental(YYYY-01-01..hoy)` → `sync_ventas_cobros`. Los 4 son **bloqueantes**: si cualquiera falla levanta `RuntimeError` y los flujos llamadores abortan el envío sin mandar correo.
   - `log_reconciliation_per_vendor(db, today, scope)`: loguea totales de cartera por vendedor trackeado vs `OBUMA_REFERENCE_TOTALS`.
   - `_sync_for_cartera_report(db)`: compat wrapper que llama a ambos.
 - **Aplicado en todos los flujos del scheduler** (`src/scheduler.py`):

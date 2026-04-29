@@ -1129,11 +1129,11 @@ def sync_for_report(db, scope: str = "report") -> dict:
            reflejen los pagos del dia, importante para cartera y KPIs)
 
     Retorna dict {endpoint -> resultado}. Levanta RuntimeError si falla
-    cualquiera de los syncs CRITICOS (clientes, ventas o ventas_items).
-    El sync de ventas_cobros es NON-BLOCKING: si falla solo se loguea WARN
-    y el reporte sigue (los saldos pueden ser ligeramente menos frescos).
+    CUALQUIERA de los 4 syncs (todos son bloqueantes). Los cobros se incluyen
+    como bloqueante porque sin ellos los saldos POR PAGAR de cartera no
+    reflejan los pagos del dia y los KPIs de cobranza serian erroneos.
     Los flujos llamadores DEBEN abortar el envio si esta funcion lanza,
-    para no mandar correos con datos parciales.
+    para no mandar correos con datos parciales o desactualizados.
 
     Args:
         db: SQLAlchemy session.
@@ -1189,18 +1189,17 @@ def sync_for_report(db, scope: str = "report") -> dict:
         t = time.time()
         results["ventas_cobros"] = loop.run_until_complete(service.sync_ventas_cobros())
         if isinstance(results["ventas_cobros"], dict) and "error" in results["ventas_cobros"]:
-            # cobros es importante para cartera (saldos al dia) pero no fatal:
-            # si falla, el resto del reporte sigue siendo util. Logueamos WARN
-            # y NO levantamos RuntimeError.
-            logger.warning(
-                f"{scope} sync ventas_cobros fallo (no bloqueante): "
-                f"{results['ventas_cobros'].get('error')}"
+            # cobros es BLOQUEANTE: sin pagos del dia los saldos POR PAGAR de
+            # cartera no reflejan la realidad y los KPIs de cobranza serian
+            # erroneos. Levantamos RuntimeError para que el flujo aborte el
+            # envio (mismo criterio que clientes/ventas/items).
+            raise RuntimeError(
+                f"sync_ventas_cobros fallo: {results['ventas_cobros'].get('error')}"
             )
-        else:
-            logger.info(
-                f"{scope} sync ventas_cobros: "
-                f"{results['ventas_cobros'].get('synced', '?')} regs en {time.time()-t:.1f}s"
-            )
+        logger.info(
+            f"{scope} sync ventas_cobros: "
+            f"{results['ventas_cobros'].get('synced', '?')} regs en {time.time()-t:.1f}s"
+        )
 
         logger.info(f"{scope} sync inmediato OK en {time.time()-t0:.1f}s totales")
         return results
