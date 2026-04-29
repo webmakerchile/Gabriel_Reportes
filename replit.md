@@ -104,5 +104,18 @@ Clasificación de producto (Maquinaria vs Repuestos): por prefijo de SKU.
 - **Obuma ERP API**: `OBUMA_API_KEY`, `OBUMA_BASE_URL`.
 - **PostgreSQL**: BD primaria.
 - **Resend**: envío de correos (`RESEND_API_KEY`, `EMAIL_FROM=reportes@autoreportes.cl`).
-- **Endpoint de salud**: `GET /api/health` (FastAPI, puerto 8000) devuelve JSON con `status` (`ok` | `degraded`), `email`, `admin_alerts` (sólo cantidad de destinatarios, no las direcciones) y `scheduler` (running, jobs activos con `next_run`). Útil para monitoreo externo (uptime, scripts, alertas independientes del log). Siempre retorna 200; los clientes deben mirar el campo `status`. `degraded` cuando el correo no está configurado o el scheduler no corre.
+- **Endpoint de salud**: `GET /api/health` (FastAPI, puerto 8000). Útil para monitoreo externo (uptime checks, scripts, alertas independientes del log). **Siempre retorna 200**; los clientes deben inspeccionar el campo `status` para decidir si alertar. Contrato del JSON (estable, los campos extra son intencionales y se mantendrán):
+  ```json
+  {
+    "status": "ok" | "degraded",
+    "timestamp": "2026-04-29T02:10:17.851669",
+    "email": {"configured": true, "method": "Resend", "sandbox": false, "from_email": "reportes@autoreportes.cl", "detail": "API Key configurada"},
+    "admin_alerts": {"configured": false, "recipients_count": 0, "reason": "ADMIN_ALERT_EMAILS no esta definida"},
+    "scheduler": "ok" | "down",
+    "scheduler_detail": {"running": true, "state": "ok", "jobs_count": 5, "jobs": [{"id": "...", "name": "...", "next_run": "2026-04-29T23:00:00-04:00"}]}
+  }
+  ```
+  - `status`: `ok` cuando email está configurado **Y** scheduler corriendo; `degraded` si falla cualquiera. `admin_alerts` no afecta `status` (es opcional por diseño).
+  - `scheduler` es **string** (`"ok"`/`"down"`) por contrato simple para monitores; el detalle rico va en `scheduler_detail`.
+  - Privacidad: `admin_alerts` **nunca** expone las direcciones individuales — sólo `recipients_count`.
 - **`ADMIN_ALERT_EMAILS`** (opcional, recomendado en producción): lista CSV de correos de admins (ej. `gabriel@vlsur.cl,otro@vlsur.cl`) que reciben aviso cuando un envío automático se aborta por fallo de sync con Obuma. Si está vacía, el sistema sigue funcionando pero la alerta sólo queda en logs (ver sección CRITICAL más arriba). **Define esta variable en el entorno de producción** para no perder el aviso si Obuma cae fuera de horario.
