@@ -55,3 +55,7 @@ externalPort = 8000
 [deployment]
 deploymentTarget = "vm"
 run = ["python", "main.py"]
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000
