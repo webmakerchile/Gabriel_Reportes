@@ -16,6 +16,7 @@ from src.etl.sync_service import SyncService
 from src.reports.excel_generator import generate_all_vendedor_reports
 from src.reports.email_service import (
     log_admin_alert_config_status,
+    log_email_config_status,
     check_email_config,
     check_admin_alert_config,
 )
@@ -255,6 +256,11 @@ async def on_startup():
     # un envio automatico se aborte por fallo de Obuma — debe quedar
     # bien visible en los logs de arranque.
     log_admin_alert_config_status(logger)
+    # Aviso simetrico para el proveedor de correo. Si RESEND/SENDGRID/SMTP
+    # no estan configurados (o EMAIL_FROM quedo en sandbox), el sistema no
+    # puede mandar reportes NI alertas a admin — debe verse al arrancar y
+    # no recien cuando el viernes a las 23:00 nadie reciba nada.
+    log_email_config_status(logger)
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _heavy_init)
     logger.info("FastAPI started - heavy init running in separate thread")

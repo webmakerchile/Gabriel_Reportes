@@ -189,6 +189,7 @@ def check_email_config() -> dict:
     sendgrid_key = os.environ.get("SENDGRID_API_KEY")
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASS")
     from_email = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 
     if resend_key:
@@ -202,7 +203,7 @@ def check_email_config() -> dict:
         }
     elif sendgrid_key:
         return {"configured": True, "method": "SendGrid", "detail": "API Key configurada", "sandbox": False, "from_email": from_email}
-    elif smtp_host and smtp_user:
+    elif smtp_host and smtp_user and smtp_pass:
         return {"configured": True, "method": "SMTP", "detail": f"Servidor: {smtp_host}", "sandbox": False, "from_email": from_email}
     else:
         return {"configured": False, "method": None, "detail": "Sin configurar.", "sandbox": False, "from_email": None}
@@ -248,6 +249,49 @@ def check_admin_alert_config() -> dict:
         "raw": raw,
         "reason": "",
     }
+
+
+def log_email_config_status(logger_obj=None) -> dict:
+    """Imprime en logs un mensaje explicito sobre el estado del proveedor de
+    correo (Resend / SendGrid / SMTP) y el remitente actual.
+
+    Pensada para llamarse al arrancar el servidor (FastAPI startup), justo
+    despues del log de ADMIN_ALERT_EMAILS, para que el sysadmin se entere
+    inmediatamente — y no el viernes a las 23:00 — si:
+      - no hay ningun proveedor configurado (no se mandara NI reportes NI
+        alertas a admin), o
+      - el remitente quedo en sandbox (`onboarding@resend.dev`), que con
+        Resend solo permite enviar al dueno de la cuenta y rebota cualquier
+        otro destinatario.
+
+    Devuelve el mismo dict que `check_email_config()` por conveniencia.
+    """
+    log = logger_obj if logger_obj is not None else logger
+    cfg = check_email_config()
+    method = cfg.get("method")
+    from_email = cfg.get("from_email")
+    if not cfg.get("configured"):
+        log.warning(
+            "EMAIL: NO CONFIGURADO - define RESEND_API_KEY (recomendado), "
+            "SENDGRID_API_KEY o SMTP_HOST/SMTP_USER/SMTP_PASS. Sin esto NO "
+            "se envian reportes automaticos NI alertas a admin."
+        )
+    elif cfg.get("sandbox"):
+        log.warning(
+            "EMAIL: %s OK pero EMAIL_FROM=%s en modo sandbox: solo puede "
+            "enviar al dueno de la cuenta Resend. Verifica el dominio en "
+            "resend.com/domains y define EMAIL_FROM con un remitente del "
+            "dominio verificado (ej. reportes@autoreportes.cl).",
+            method,
+            from_email,
+        )
+    else:
+        log.info(
+            "EMAIL: %s OK (remitente: %s)",
+            method,
+            from_email,
+        )
+    return cfg
 
 
 def log_admin_alert_config_status(logger_obj=None) -> dict:
