@@ -14,7 +14,12 @@ from src.models.models import (
 )
 from src.etl.sync_service import SyncService
 from src.reports.excel_generator import generate_all_vendedor_reports
-from src.reports.email_service import log_admin_alert_config_status
+from src.reports.email_service import (
+    log_admin_alert_config_status,
+    check_email_config,
+    check_admin_alert_config,
+)
+from src.scheduler import get_scheduler_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -258,6 +263,80 @@ async def on_startup():
 @app.get("/")
 def root():
     return {"status": "alive"}
+
+
+@app.get("/api/health")
+def health():
+    """Estado del sistema para monitoreo externo (uptime checks, scripts, etc.).
+
+    Devuelve un JSON con:
+      - email: estado del proveedor de correo (Resend/SendGrid/SMTP) y si esta
+        en modo sandbox.
+      - admin_alerts: si las alertas a admin estan configuradas (cantidad de
+        destinatarios, sin exponer las direcciones por privacidad).
+      - scheduler: si el scheduler esta corriendo y cuantos jobs tiene activos.
+      - status: "ok" si todo esencial responde, "degraded" si hay algo
+        importante caido (scheduler down o correo sin configurar).
+
+    Siempre retorna 200 — el cliente debe inspeccionar `status` para alertar.
+    No expone correos completos: solo cantidad de destinatarios.
+    """
+    # Top-level guard: el endpoint debe responder siempre 200 con status
+    # "degraded" antes que devolver 500 si algun helper rompe en el futuro.
+    try:
+        email_cfg = check_email_config()
+    except Exception as e:
+        logger.error(f"/api/health: check_email_config fallo: {e}", exc_info=True)
+        email_cfg = {"configured": False, "method": None, "detail": "error", "sandbox": False, "from_email": None}
+    try:
+        alert_cfg = check_admin_alert_config()
+    except Exception as e:
+        logger.error(f"/api/health: check_admin_alert_config fallo: {e}", exc_info=True)
+        alert_cfg = {"configured": False, "emails": [], "reason": "error"}
+    try:
+        sched_state = get_scheduler_status()
+    except Exception as e:
+        logger.error(f"/api/health: get_scheduler_status fallo: {e}", exc_info=True)
+        sched_state = {"running": False, "state": "error", "jobs_count": 0, "jobs": []}
+
+    email_block = {
+        "configured": email_cfg.get("configured", False),
+        "method": email_cfg.get("method"),
+        "sandbox": email_cfg.get("sandbox", False),
+        "from_email": email_cfg.get("from_email"),
+        "detail": email_cfg.get("detail"),
+    }
+    admin_alerts_block = {
+        "configured": alert_cfg.get("configured", False),
+        "recipients_count": len(alert_cfg.get("emails", [])),
+        "reason": alert_cfg.get("reason") or None,
+    }
+    # Scheduler como STRING segun contrato del spec ("ok"|"down"). El detalle
+    # rico (jobs, next_run) va en scheduler_detail. NO se expone el texto
+    # crudo de excepciones del scheduler en el JSON publico (queda solo en
+    # logs internos), para no filtrar internals si el endpoint es publico.
+    sched_state_str = sched_state.get("state", "down")
+    if sched_state_str not in ("ok", "down"):
+        sched_state_str = "down"
+    scheduler_detail = {
+        "running": sched_state.get("running", False),
+        "state": sched_state.get("state", "down"),
+        "jobs_count": sched_state.get("jobs_count", 0),
+        "jobs": sched_state.get("jobs", []),
+    }
+
+    overall = "ok"
+    if not email_block["configured"] or not scheduler_detail["running"]:
+        overall = "degraded"
+
+    return {
+        "status": overall,
+        "timestamp": datetime.now().isoformat(),
+        "email": email_block,
+        "admin_alerts": admin_alerts_block,
+        "scheduler": sched_state_str,
+        "scheduler_detail": scheduler_detail,
+    }
 
 
 def _run_sync_step_blocking(step_key: str):

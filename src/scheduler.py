@@ -485,6 +485,38 @@ def _calc_next_execution(sched, now):
     return nxt
 
 
+def get_scheduler_status() -> dict:
+    """Devuelve el estado actual del scheduler para el endpoint de salud.
+
+    Retorna:
+      - running (bool): True si el singleton existe y esta corriendo.
+      - jobs_count (int): cantidad de jobs registrados (0 si no esta corriendo).
+      - jobs (list[dict]): id + name + next_run_iso de cada job programado.
+      - state (str): "ok" si running, "down" si no, "error" si excepcion.
+    """
+    global _scheduler_instance
+    try:
+        if _scheduler_instance is None:
+            return {"running": False, "state": "down", "jobs_count": 0, "jobs": []}
+        if not _scheduler_instance.running:
+            return {"running": False, "state": "down", "jobs_count": 0, "jobs": []}
+        jobs = []
+        for j in _scheduler_instance.get_jobs():
+            jobs.append({
+                "id": j.id,
+                "name": j.name,
+                "next_run": j.next_run_time.isoformat() if j.next_run_time else None,
+            })
+        return {
+            "running": True,
+            "state": "ok",
+            "jobs_count": len(jobs),
+            "jobs": jobs,
+        }
+    except Exception as e:
+        return {"running": False, "state": "error", "error": str(e)[:200], "jobs_count": 0, "jobs": []}
+
+
 def start_scheduler():
     # ── FIX 1: Singleton — evita crear múltiples schedulers al reiniciar FastAPI ──
     global _scheduler_instance

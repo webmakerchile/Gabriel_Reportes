@@ -104,4 +104,5 @@ Clasificación de producto (Maquinaria vs Repuestos): por prefijo de SKU.
 - **Obuma ERP API**: `OBUMA_API_KEY`, `OBUMA_BASE_URL`.
 - **PostgreSQL**: BD primaria.
 - **Resend**: envío de correos (`RESEND_API_KEY`, `EMAIL_FROM=reportes@autoreportes.cl`).
+- **Endpoint de salud**: `GET /api/health` (FastAPI, puerto 8000) devuelve JSON con `status` (`ok` | `degraded`), `email`, `admin_alerts` (sólo cantidad de destinatarios, no las direcciones) y `scheduler` (running, jobs activos con `next_run`). Útil para monitoreo externo (uptime, scripts, alertas independientes del log). Siempre retorna 200; los clientes deben mirar el campo `status`. `degraded` cuando el correo no está configurado o el scheduler no corre.
 - **`ADMIN_ALERT_EMAILS`** (opcional, recomendado en producción): lista CSV de correos de admins (ej. `gabriel@vlsur.cl,otro@vlsur.cl`) que reciben aviso cuando un envío automático se aborta por fallo de sync con Obuma. Si está vacía, el sistema sigue funcionando pero la alerta sólo queda en logs (ver sección CRITICAL más arriba). **Define esta variable en el entorno de producción** para no perder el aviso si Obuma cae fuera de horario.
