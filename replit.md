@@ -102,3 +102,4 @@ Clasificación de producto (Maquinaria vs Repuestos): por prefijo de SKU.
 - **Obuma ERP API**: `OBUMA_API_KEY`, `OBUMA_BASE_URL`.
 - **PostgreSQL**: BD primaria.
 - **Resend**: envío de correos (`RESEND_API_KEY`, `EMAIL_FROM=reportes@autoreportes.cl`).
+- **`ADMIN_ALERT_EMAILS`** (opcional, recomendado en producción): lista CSV de correos de admins (ej. `gabriel@vlsur.cl,otro@vlsur.cl`) que reciben aviso cuando un envío automático se aborta por fallo de sync con Obuma. Si está vacía, el sistema sigue funcionando pero la alerta sólo queda en logs (ver sección CRITICAL más arriba). **Define esta variable en el entorno de producción** para no perder el aviso si Obuma cae fuera de horario.
