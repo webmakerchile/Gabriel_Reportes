@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import date, datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -17,6 +18,7 @@ from src.reports.email_service import (
     check_email_config,
     send_admin_alert,
     build_admin_alert_html,
+    build_health_degraded_alert_html,
 )
 
 logger = logging.getLogger(__name__)
@@ -485,6 +487,96 @@ def _calc_next_execution(sched, now):
     return nxt
 
 
+def _send_health_degraded_alert(reasons: list) -> None:
+    """Envia correo de alerta cuando el monitor interno detecta status=degraded.
+
+    Mismo patron que `_send_sync_failure_alert`:
+    - No-op silencioso si no hay ADMIN_ALERT_EMAILS configurado.
+    - Cooldown de ALERT_COOLDOWN_HOURS por scope ("Salud del Sistema").
+    - Nunca propaga excepciones.
+    """
+    scope = "Salud del Sistema"
+    try:
+        now = datetime.now()
+        last = _last_alert_sent_at.get(scope)
+        if last is not None:
+            age_h = (now - last).total_seconds() / 3600.0
+            if age_h < ALERT_COOLDOWN_HOURS:
+                logger.debug(
+                    f"Alerta admin para '{scope}' omitida (cooldown {age_h:.2f}h < "
+                    f"{ALERT_COOLDOWN_HOURS}h)"
+                )
+                return
+
+        subject = f"[ALERTA] Salud del sistema en estado DEGRADED"
+        body = build_health_degraded_alert_html(
+            reasons=reasons,
+            occurred_at=now,
+            health_url=os.environ.get("HEALTH_URL"),  # opcional, sólo informativo
+        )
+        result = send_admin_alert(subject, body)
+        if result.get("skipped"):
+            logger.warning(
+                f"Alerta admin para '{scope}' no enviada: {result.get('reason')}. "
+                f"Define ADMIN_ALERT_EMAILS para recibirla."
+            )
+        elif result.get("success"):
+            _last_alert_sent_at[scope] = now
+            logger.info(
+                f"Alerta admin enviada para '{scope}' (cooldown {ALERT_COOLDOWN_HOURS}h activo). "
+                f"Componentes degradados: {', '.join(reasons)}"
+            )
+        else:
+            logger.error(
+                f"Alerta admin para '{scope}' fallo al enviarse: {result.get('error')}"
+            )
+    except Exception as alert_err:
+        logger.error(
+            f"Excepcion enviando alerta admin para '{scope}': {alert_err}",
+            exc_info=True,
+        )
+
+
+def internal_health_check() -> dict:
+    """Job interno que revisa periodicamente el estado del sistema y dispara
+    alerta si esta degraded. Es el equivalente a un uptime check externo
+    pero corre dentro del mismo proceso FastAPI/scheduler.
+
+    Limitaciones a tener en cuenta (documentadas en replit.md):
+      - NO detecta el caso "todo el servidor caido" — para eso se necesita
+        un monitor externo (UptimeRobot/BetterStack) que llame a /api/health
+        desde fuera. Este job sólo cubre el caso "servidor arriba pero
+        algun componente clave en mal estado".
+
+    Retorna el dict de estado para facilitar testing.
+    """
+    reasons = []
+    try:
+        email_cfg = check_email_config()
+    except Exception as e:
+        logger.error(f"internal_health_check: check_email_config fallo: {e}")
+        email_cfg = {"configured": False}
+    try:
+        sched_state = get_scheduler_status()
+    except Exception as e:
+        logger.error(f"internal_health_check: get_scheduler_status fallo: {e}")
+        sched_state = {"running": False, "state": "error"}
+
+    if not email_cfg.get("configured"):
+        reasons.append("Servicio de correo NO configurado (sin RESEND_API_KEY/SENDGRID_API_KEY/SMTP)")
+    if not sched_state.get("running"):
+        reasons.append("Scheduler interno NO está corriendo (no se enviarán reportes automáticos)")
+
+    status = "degraded" if reasons else "ok"
+    if status == "degraded":
+        logger.warning(f"internal_health_check: estado DEGRADED. Razones: {reasons}")
+        _send_health_degraded_alert(reasons)
+    else:
+        logger.debug("internal_health_check: estado OK")
+
+    return {"status": status, "reasons": reasons}
+
+
 def get_scheduler_status() -> dict:
     """Devuelve el estado actual del scheduler para el endpoint de salud.
 
@@ -564,12 +656,20 @@ def start_scheduler():
         name="Verificar Reportes Programados (cada 15 min)",
         replace_existing=True,
     )
+    scheduler.add_job(
+        internal_health_check,
+        IntervalTrigger(minutes=5, timezone="America/Santiago"),
+        id="internal_health_check",
+        name="Monitor interno de salud (cada 5 min)",
+        replace_existing=True,
+    )
     scheduler.start()
     _scheduler_instance = scheduler
     logger.info(
         "Scheduler iniciado - Sync ligero diario 18:30 + "
         "Reportes Lun-Jue 23:00 + Reporte Semanal viernes 23:00 + "
-        "Reportes Sab-Dom 09:00 + Verificacion programados cada 15 min "
+        "Reportes Sab-Dom 09:00 + Verificacion programados cada 15 min + "
+        "Monitor interno de salud cada 5 min "
         "(todos con sync inmediato + abort-on-failure)"
     )
     return scheduler

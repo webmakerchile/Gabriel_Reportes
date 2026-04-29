@@ -21,6 +21,7 @@ Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de
   - **Viernes 23:00**: reporte semanal por vendedor (sync inmediato + abort-on-failure)
   - **Sáb-Dom 09:00**: reportes de fin de semana (sync inmediato + abort-on-failure)
   - **Cada 15 min**: `process_scheduled_reports` chequea schedules custom; si hay alguno due hace UN solo sync inmediato + abort y luego envía todos los due en ese tick.
+  - **Cada 5 min**: `internal_health_check` revisa estado del sistema (correo + scheduler) y si está `degraded` envía alerta a `ADMIN_ALERT_EMAILS` (con cooldown 1h, mismo scope: `Salud del Sistema`).
 - **Reports**: `src/reports/excel_generator.py` (openpyxl) + `src/reports/email_service.py` (Resend, `EMAIL_FROM=reportes@autoreportes.cl`)
 
 **Estilos Excel**: amarillo en celdas en cero, verde en segmento ABC, encabezados azul/blanco.
@@ -119,3 +120,27 @@ Clasificación de producto (Maquinaria vs Repuestos): por prefijo de SKU.
   - `scheduler` es **string** (`"ok"`/`"down"`) por contrato simple para monitores; el detalle rico va en `scheduler_detail`.
   - Privacidad: `admin_alerts` **nunca** expone las direcciones individuales — sólo `recipients_count`.
 - **`ADMIN_ALERT_EMAILS`** (opcional, recomendado en producción): lista CSV de correos de admins (ej. `gabriel@vlsur.cl,otro@vlsur.cl`) que reciben aviso cuando un envío automático se aborta por fallo de sync con Obuma. Si está vacía, el sistema sigue funcionando pero la alerta sólo queda en logs (ver sección CRITICAL más arriba). **Define esta variable en el entorno de producción** para no perder el aviso si Obuma cae fuera de horario.
+
+## Monitoreo del endpoint de salud (interno + externo)
+
+Hay **dos capas** de monitoreo del `/api/health` que se complementan:
+
+### 1. Monitor interno (automático, ya activo)
+- Job APScheduler `internal_health_check` corre **cada 5 minutos** dentro del mismo proceso FastAPI.
+- Llama directamente a `check_email_config()` + `get_scheduler_status()` (no hace HTTP, así que no depende del proxy/nginx).
+- Si detecta `degraded`, envía correo a `ADMIN_ALERT_EMAILS` con la lista de componentes en mal estado y aplica el mismo cooldown de **1 hora por scope** (`Salud del Sistema`) usado por `_send_sync_failure_alert`.
+- **Limitación**: si todo el servidor se cae (proceso muerto, kernel panic, deploy roto), este job tampoco corre — por eso es necesaria la capa externa.
+
+### 2. Monitor externo (recomendado configurar en producción)
+Configura **uno** de estos servicios apuntando a `https://<dominio>/api/health` (recordar que el servidor SIEMPRE retorna 200 — el monitor debe inspeccionar el body JSON, no sólo el status code):
+
+- **UptimeRobot** (gratis hasta 50 monitores, intervalo mínimo 5 min):
+  - Tipo: `Keyword` monitor
+  - URL: `https://<dominio>/api/health`
+  - Keyword: `"status":"ok"`
+  - Alert when: `Keyword Not Exists` → así avisa tanto si el body trae `"degraded"` como si el endpoint no responde.
+  - Notificación: correo a Gabriel (idealmente la misma lista de `ADMIN_ALERT_EMAILS`).
+- **BetterStack** o **Healthchecks.io**: equivalentes, ambos soportan asserts sobre JSON del response.
+- **Cron simple en otro Replit / GitHub Actions**: `curl -s $URL | jq -e '.status == "ok"'` y enviar correo si falla.
+
+Frecuencia recomendada: **cada 5 minutos** (alineado con el monitor interno). Destinatarios: la misma lista de `ADMIN_ALERT_EMAILS` para que Gabriel reciba todas las alertas en un solo lugar.

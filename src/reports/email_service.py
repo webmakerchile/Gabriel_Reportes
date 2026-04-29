@@ -344,6 +344,55 @@ def build_admin_alert_html(scope: str, error_text: str, occurred_at: datetime, s
     """
 
 
+def build_health_degraded_alert_html(reasons: list, occurred_at: datetime, health_url: str = None) -> str:
+    """Construye el cuerpo HTML para una alerta de salud degradada del sistema.
+
+    A diferencia de la alerta de fallo de sync (rojo), esta usa naranja
+    porque el sistema sigue arriba — sólo hay componentes en mal estado
+    (correo sin configurar, scheduler caído, etc.).
+    """
+    import html as _html
+    reasons_html = "".join(
+        f'<li style="margin:4px 0;color:#1a1f2e;">{_html.escape(str(r))}</li>'
+        for r in reasons
+    ) or '<li style="color:#888;">(sin detalle)</li>'
+    url_html = ""
+    if health_url:
+        url_html = (
+            f'<p style="color:#444;font-size:13px;margin:12px 0 0;">'
+            f'Endpoint consultado: <a href="{_html.escape(health_url)}" style="color:#0a66c2;">'
+            f'{_html.escape(health_url)}</a></p>'
+        )
+    return f"""
+    <div style="font-family:'Inter',Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+        <div style="background:linear-gradient(135deg,#e67e22,#ca6f1e);padding:24px 30px;">
+            <h1 style="color:#fff;margin:0;font-size:20px;">SALUD DEL SISTEMA - BI Platform VLSur</h1>
+            <p style="color:rgba(255,255,255,0.9);margin:6px 0 0;font-size:13px;">Estado degradado detectado</p>
+        </div>
+        <div style="padding:24px 30px;">
+            <h2 style="color:#1a1f2e;margin:0 0 12px;font-size:17px;">El sistema sigue funcionando, pero hay componentes con problemas</h2>
+            <p style="color:#444;margin:0 0 12px;font-size:14px;">
+                El monitor interno revisó <code>/api/health</code> y detectó
+                que el sistema está en estado <strong>degraded</strong>.
+                Los reportes pueden no enviarse correctamente hasta que
+                esto se solucione.
+            </p>
+            <p style="color:#1a1f2e;margin:16px 0 6px;font-size:14px;font-weight:600;">Componentes en mal estado:</p>
+            <ul style="margin:0 0 8px 18px;padding:0;font-size:14px;">{reasons_html}</ul>
+            <p style="color:#444;margin:14px 0 0;font-size:14px;">
+                <strong>Hora de la detección:</strong> {occurred_at.strftime('%d/%m/%Y %H:%M')}
+            </p>
+            {url_html}
+            <p style="color:#888;font-size:12px;margin-top:20px;padding-top:16px;border-top:1px solid #eee;">
+                Esta alerta se envía con cooldown de 1 hora para no inundar la bandeja
+                si el componente queda mal por un rato. Si recibes 2 correos seguidos,
+                pasaron al menos 60 minutos entre ellos.
+            </p>
+        </div>
+    </div>
+    """
+
+
 def test_email_delivery(to_email: str) -> dict:
     """Send a real test email and return success/error info."""
     resend_key = os.environ.get("RESEND_API_KEY")
