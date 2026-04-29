@@ -16,7 +16,11 @@ Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de
 - **Frontend**: Streamlit (puerto 5000)
 - **DB**: PostgreSQL (single source of truth, 28 modelos, multi-tenant)
 - **ETL**: módulo Python que consume API Obuma (21 endpoints sincronizando)
-- **Scheduler**: APScheduler — sync diario 18:30 hora Chile + reportes automáticos (lunes-jueves 20:30, viernes 23:00)
+- **Scheduler**: APScheduler — sync ligero diario 18:30 hora Chile + envíos automáticos:
+  - **Lun-Jue 23:00**: reportes diarios por vendedor (sync inmediato + abort-on-failure)
+  - **Viernes 23:00**: reporte semanal por vendedor (sync inmediato + abort-on-failure)
+  - **Sáb-Dom 09:00**: reportes de fin de semana (sync inmediato + abort-on-failure)
+  - **Cada 15 min**: `process_scheduled_reports` chequea schedules custom; si hay alguno due hace UN solo sync inmediato + abort y luego envía todos los due en ese tick.
 - **Reports**: `src/reports/excel_generator.py` (openpyxl) + `src/reports/email_service.py` (Resend, `EMAIL_FROM=reportes@autoreportes.cl`)
 
 **Estilos Excel**: amarillo en celdas en cero, verde en segmento ABC, encabezados azul/blanco.
@@ -42,12 +46,20 @@ Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de
   - NDs: font azul oscuro bold (`ND_FONT`) — cargo adicional al cliente.
   - Facturas/Boletas: font normal negro.
 
-## CRITICAL: Reporte Cartera/Cobranza
+## CRITICAL: Sync inmediato + abort-on-failure (TODOS los envíos automáticos)
 
-- **Sync inmediato antes de generar** (`generate_all_cartera_cobranza_reports(db, do_sync=True)`):
-  - Ejecuta sync de `clientes` + `ventas` + `ventas_items_incremental(YYYY-01-01..hoy)` ANTES de generar cualquier Excel.
-  - Si el sync falla → ABORTA la generación (return `[]`) para no enviar datos viejos.
-  - Tras el sync, registra en logs el cuadre de los 5 vendedores trackeados (totales y % vencido) para auditar contra Obuma.
+Política unificada para que Gabriel nunca reciba un correo con datos parciales o desactualizados:
+
+- **Helpers compartidos en `src/reports/excel_generator.py`**:
+  - `sync_for_report(db, scope)`: ejecuta `sync_clientes` → `sync_ventas` → `sync_ventas_items_incremental(YYYY-01-01..hoy)` → `sync_ventas_cobros`. Levanta `RuntimeError` si los 3 primeros fallan; cobros es non-blocking (warn).
+  - `log_reconciliation_per_vendor(db, today, scope)`: loguea totales de cartera por vendedor trackeado vs `OBUMA_REFERENCE_TOTALS`.
+  - `_sync_for_cartera_report(db)`: compat wrapper que llama a ambos.
+- **Aplicado en todos los flujos del scheduler** (`src/scheduler.py`):
+  - `_generate_and_send_individual_reports` (usado por `daily_weekday_reports`, `weekly_friday_reports`, `weekend_morning_reports`): sync inmediato al inicio; si falla, **NO se envía ningún correo** y se loguea ERROR.
+  - `process_scheduled_reports`: chequea schedules due primero; si hay alguno, hace UN solo sync inmediato + reconciliación, y solo si pasa procede con los envíos. Si falla, ABORTA todos los schedules due en ese tick.
+  - `generate_all_cartera_cobranza_reports(db, do_sync=True)`: igual comportamiento (return `[]` si sync falla).
+
+## CRITICAL: Reporte Cartera/Cobranza
 - **Detección de staleness en path por-vendedor** (`generate_cartera_cobranza_report`):
   - Si la última sincronización de `Ventas` en `ObumaApiEndpoint.ultima_sync` tiene > 2 horas, emite WARNING en logs (la entrada batch normal hace sync inmediato; este check solo cubre llamadas directas que pudieran bypassear el batch).
 - **Filtros**: `vendedor_id`, `tipo_documento ∈ VALID_DOC_TYPES`, `total_por_pagar > 0`, `anulada == False`.

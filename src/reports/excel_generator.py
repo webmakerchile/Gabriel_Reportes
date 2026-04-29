@@ -1109,10 +1109,36 @@ def _build_cobranza_summary(rows, report_date):
     }
 
 
-def _sync_for_cartera_report(db) -> dict:
-    """Ejecuta sync de ventas + ventas_items_incremental(YYYY-01-01..hoy) + clientes.
-    Retorna dict con resultados. Levanta RuntimeError si algun sync falla.
-    Esto garantiza que el reporte de cartera refleje las facturas emitidas hoy.
+TRACKED_VENDEDOR_IDS_RECON = [
+    ("28856", "Gabriel"),
+    ("28886", "Jhonatan"),
+    ("28887", "Ernesto"),
+    ("28891", "Pablo"),
+    ("28892", "Jesus"),
+]
+
+
+def sync_for_report(db, scope: str = "report") -> dict:
+    """Sync inmediato compartido para TODOS los flujos de envio de reportes.
+
+    Ejecuta secuencialmente:
+        1) sync_clientes
+        2) sync_ventas
+        3) sync_ventas_items_incremental(YYYY-01-01..hoy)
+        4) sync_ventas_cobros (para que total_pagado/total_por_pagar
+           reflejen los pagos del dia, importante para cartera y KPIs)
+
+    Retorna dict {endpoint -> resultado}. Levanta RuntimeError si falla
+    cualquiera de los syncs CRITICOS (clientes, ventas o ventas_items).
+    El sync de ventas_cobros es NON-BLOCKING: si falla solo se loguea WARN
+    y el reporte sigue (los saldos pueden ser ligeramente menos frescos).
+    Los flujos llamadores DEBEN abortar el envio si esta funcion lanza,
+    para no mandar correos con datos parciales.
+
+    Args:
+        db: SQLAlchemy session.
+        scope: etiqueta para logs (p.ej. "Cartera/Cobranza", "Reporte Diario",
+               "Reporte Semanal", "Reporte Programado").
     """
     import asyncio
     import time
@@ -1124,101 +1150,130 @@ def _sync_for_cartera_report(db) -> dict:
     fecha_hasta = today.strftime("%Y-%m-%d")
 
     service = SyncService(db)
+    # Creamos un loop dedicado pero NO lo seteamos como default del thread:
+    # asi evitamos dejar un loop cerrado como event_loop por defecto que
+    # rompa llamadas posteriores a asyncio.get_event_loop() en el mismo
+    # thread (p.ej. dentro de _generate_and_send_individual_reports tras
+    # este sync).
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     results = {}
     t0 = time.time()
     try:
-        logger.info("Cartera/Cobranza: iniciando sync inmediato (clientes + ventas + ventas_items)...")
+        logger.info(f"{scope}: iniciando sync inmediato (clientes + ventas + items + cobros)...")
 
         t = time.time()
         results["clientes"] = loop.run_until_complete(service.sync_clientes())
         if isinstance(results["clientes"], dict) and "error" in results["clientes"]:
-            raise RuntimeError(f"sync_clientes falló: {results['clientes'].get('error')}")
-        logger.info(f"Cartera sync clientes: {results['clientes'].get('synced', '?')} regs en {time.time()-t:.1f}s")
+            raise RuntimeError(f"sync_clientes fallo: {results['clientes'].get('error')}")
+        logger.info(f"{scope} sync clientes: {results['clientes'].get('synced', '?')} regs en {time.time()-t:.1f}s")
 
         t = time.time()
         results["ventas"] = loop.run_until_complete(service.sync_ventas())
         if isinstance(results["ventas"], dict) and "error" in results["ventas"]:
-            raise RuntimeError(f"sync_ventas falló: {results['ventas'].get('error')}")
-        logger.info(f"Cartera sync ventas: {results['ventas'].get('synced', '?')} regs en {time.time()-t:.1f}s")
+            raise RuntimeError(f"sync_ventas fallo: {results['ventas'].get('error')}")
+        logger.info(f"{scope} sync ventas: {results['ventas'].get('synced', '?')} regs en {time.time()-t:.1f}s")
 
         t = time.time()
         results["ventas_items"] = loop.run_until_complete(
             service.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
         )
         if isinstance(results["ventas_items"], dict) and "error" in results["ventas_items"]:
-            raise RuntimeError(f"sync_ventas_items_incremental falló: {results['ventas_items'].get('error')}")
+            raise RuntimeError(
+                f"sync_ventas_items_incremental fallo: {results['ventas_items'].get('error')}"
+            )
         logger.info(
-            f"Cartera sync ventas_items {fecha_desde}..{fecha_hasta}: "
+            f"{scope} sync ventas_items {fecha_desde}..{fecha_hasta}: "
             f"{results['ventas_items'].get('synced', '?')} items en {time.time()-t:.1f}s"
         )
 
-        logger.info(f"Cartera sync inmediato OK en {time.time()-t0:.1f}s totales")
-
-        # Reconciliacion: log totales por vendedor trackeado y comparar contra
-        # los valores conocidos de la pantalla "Facturas por Cobrar" de Obuma.
-        # Para actualizar las referencias: ir a Obuma > Facturas por Cobrar,
-        # filtrar por vendedor y copiar el TOTAL en OBUMA_REFERENCE_TOTALS.
-        # Si el valor es None, solo se loguea el total interno sin %diff.
-        try:
-            tracked = [
-                ("28856", "Gabriel"),
-                ("28886", "Jhonatan"),
-                ("28887", "Ernesto"),
-                ("28891", "Pablo"),
-                ("28892", "Jesus"),
-            ]
-            logger.info(
-                "Cartera/Cobranza RECONCILIACION (post-sync vs pantalla 'Facturas por Cobrar' de Obuma):"
+        t = time.time()
+        results["ventas_cobros"] = loop.run_until_complete(service.sync_ventas_cobros())
+        if isinstance(results["ventas_cobros"], dict) and "error" in results["ventas_cobros"]:
+            # cobros es importante para cartera (saldos al dia) pero no fatal:
+            # si falla, el resto del reporte sigue siendo util. Logueamos WARN
+            # y NO levantamos RuntimeError.
+            logger.warning(
+                f"{scope} sync ventas_cobros fallo (no bloqueante): "
+                f"{results['ventas_cobros'].get('error')}"
             )
-            ok_count = 0
-            warn_count = 0
-            for vid, name in tracked:
-                _rows = _build_cobranza_rows(db, vid, today)
-                _summary = _build_cobranza_summary(_rows, today)
-                excel_total = _summary["total_a_cobrar"]
-                obuma_ref = OBUMA_REFERENCE_TOTALS.get(vid)
-                if obuma_ref is None or obuma_ref == 0:
-                    logger.info(
-                        f"  [{vid}] {name}: docs={_summary['cant_docs']} "
-                        f"excel_total=${excel_total:,.0f} "
-                        f"vencido=${_summary['total_vencido']:,.0f} "
-                        f"({_summary['pct_vencido']:.1f}%) "
-                        f"obuma_ref=N/A (sin referencia configurada)"
-                    )
-                else:
-                    diff = excel_total - obuma_ref
-                    pct_diff = (diff / obuma_ref) * 100 if obuma_ref else 0.0
-                    estado = "OK" if abs(pct_diff) < 0.5 else "REVISAR"
-                    if estado == "OK":
-                        ok_count += 1
-                    else:
-                        warn_count += 1
-                    logger.info(
-                        f"  [{vid}] {name}: docs={_summary['cant_docs']} "
-                        f"excel_total=${excel_total:,.0f} "
-                        f"obuma_ref=${obuma_ref:,.0f} "
-                        f"diff=${diff:+,.0f} ({pct_diff:+.2f}%) "
-                        f"vencido=${_summary['total_vencido']:,.0f} "
-                        f"({_summary['pct_vencido']:.1f}%) "
-                        f"=> {estado}"
-                    )
-            if ok_count + warn_count > 0:
-                logger.info(
-                    f"Cartera/Cobranza RECONCILIACION resumen: "
-                    f"{ok_count} vendedor(es) cuadran (<0.5%), "
-                    f"{warn_count} requieren revision."
-                )
-        except Exception as _e:
-            logger.warning(f"No se pudo loguear reconciliacion por vendedor: {_e}")
+        else:
+            logger.info(
+                f"{scope} sync ventas_cobros: "
+                f"{results['ventas_cobros'].get('synced', '?')} regs en {time.time()-t:.1f}s"
+            )
 
+        logger.info(f"{scope} sync inmediato OK en {time.time()-t0:.1f}s totales")
         return results
     finally:
         try:
             loop.close()
         except Exception:
             pass
+
+
+def log_reconciliation_per_vendor(db, today=None, scope: str = "Reporte") -> None:
+    """Loguea bloque RECONCILIACION con totales de cartera por vendedor
+    trackeado, comparando contra OBUMA_REFERENCE_TOTALS. Reutilizable por
+    todos los flujos de reportes (cartera, ventas, semanal).
+
+    No levanta excepciones — fallos se loguean pero no abortan el flujo.
+    """
+    from datetime import date as _date
+    if today is None:
+        today = _date.today()
+    try:
+        logger.info(
+            f"{scope} RECONCILIACION (post-sync vs pantalla 'Facturas por Cobrar' de Obuma):"
+        )
+        ok_count = 0
+        warn_count = 0
+        for vid, name in TRACKED_VENDEDOR_IDS_RECON:
+            _rows = _build_cobranza_rows(db, vid, today)
+            _summary = _build_cobranza_summary(_rows, today)
+            excel_total = _summary["total_a_cobrar"]
+            obuma_ref = OBUMA_REFERENCE_TOTALS.get(vid)
+            if obuma_ref is None or obuma_ref == 0:
+                logger.info(
+                    f"  [{vid}] {name}: docs={_summary['cant_docs']} "
+                    f"excel_total=${excel_total:,.0f} "
+                    f"vencido=${_summary['total_vencido']:,.0f} "
+                    f"({_summary['pct_vencido']:.1f}%) "
+                    f"obuma_ref=N/A (sin referencia configurada)"
+                )
+            else:
+                diff = excel_total - obuma_ref
+                pct_diff = (diff / obuma_ref) * 100 if obuma_ref else 0.0
+                estado = "OK" if abs(pct_diff) < 0.5 else "REVISAR"
+                if estado == "OK":
+                    ok_count += 1
+                else:
+                    warn_count += 1
+                logger.info(
+                    f"  [{vid}] {name}: docs={_summary['cant_docs']} "
+                    f"excel_total=${excel_total:,.0f} "
+                    f"obuma_ref=${obuma_ref:,.0f} "
+                    f"diff=${diff:+,.0f} ({pct_diff:+.2f}%) "
+                    f"vencido=${_summary['total_vencido']:,.0f} "
+                    f"({_summary['pct_vencido']:.1f}%) "
+                    f"=> {estado}"
+                )
+        if ok_count + warn_count > 0:
+            logger.info(
+                f"{scope} RECONCILIACION resumen: "
+                f"{ok_count} vendedor(es) cuadran (<0.5%), "
+                f"{warn_count} requieren revision."
+            )
+    except Exception as _e:
+        logger.warning(f"No se pudo loguear reconciliacion por vendedor: {_e}")
+
+
+def _sync_for_cartera_report(db) -> dict:
+    """Compat wrapper: hace sync inmediato + reconciliacion para Cartera.
+    Mantener para no romper callers existentes."""
+    from datetime import date as _date
+    results = sync_for_report(db, scope="Cartera/Cobranza")
+    log_reconciliation_per_vendor(db, _date.today(), scope="Cartera/Cobranza")
+    return results
 
 
 def _check_cartera_data_freshness(db, max_hours: float = 2.0) -> None:
