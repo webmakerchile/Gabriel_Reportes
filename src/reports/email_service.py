@@ -208,6 +208,76 @@ def check_email_config() -> dict:
         return {"configured": False, "method": None, "detail": "Sin configurar.", "sandbox": False, "from_email": None}
 
 
+def send_admin_alert(subject: str, body_html: str) -> dict:
+    """Envia un correo corto de ALERTA a la lista de admins definida en
+    la variable de entorno ADMIN_ALERT_EMAILS (separada por coma).
+
+    No lleva attachments y NO depende de ningun dato de Obuma — esta
+    pensada para avisar fallos del propio sistema (p.ej. un sync abortado).
+
+    Retorna {"success": bool, ...}. Si no hay ADMIN_ALERT_EMAILS configurado
+    o no hay servicio de email, retorna {"success": False, "skipped": True}
+    sin levantar excepcion (no debe romper nunca el flujo llamador).
+    """
+    admin_csv = os.environ.get("ADMIN_ALERT_EMAILS", "").strip()
+    if not admin_csv:
+        return {"success": False, "skipped": True, "reason": "ADMIN_ALERT_EMAILS no configurado"}
+
+    admin_emails = [e.strip() for e in admin_csv.replace("\n", ",").split(",") if e.strip() and "@" in e.strip()]
+    if not admin_emails:
+        return {"success": False, "skipped": True, "reason": "ADMIN_ALERT_EMAILS sin emails validos"}
+
+    try:
+        # Reusa send_report_email sin attachments. Esa funcion ya selecciona
+        # Resend/SendGrid/SMTP segun lo que este configurado.
+        return send_report_email(admin_emails, subject, body_html, attachment_paths=None)
+    except Exception as e:
+        logger.error(f"send_admin_alert exception: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def build_admin_alert_html(scope: str, error_text: str, occurred_at: datetime, suggestion: str = None) -> str:
+    """Construye el cuerpo HTML del correo de alerta de fallo de sync.
+
+    Escapa scope/error_text/suggestion para que mensajes de error con HTML/`<`/`&`
+    no rompan el formato ni inyecten markup en la bandeja del admin.
+    """
+    import html as _html
+    scope_safe = _html.escape(str(scope))
+    error_safe = _html.escape(str(error_text))
+    suggestion_html = ""
+    if suggestion:
+        suggestion_html = (
+            f'<p style="color:#444;margin:12px 0 0;font-size:14px;">'
+            f'<strong>Que hacer:</strong> {_html.escape(str(suggestion))}</p>'
+        )
+    return f"""
+    <div style="font-family:'Inter',Arial,sans-serif;max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+        <div style="background:linear-gradient(135deg,#c0392b,#922b21);padding:24px 30px;">
+            <h1 style="color:#fff;margin:0;font-size:20px;">ALERTA - BI Platform VLSur</h1>
+            <p style="color:rgba(255,255,255,0.85);margin:6px 0 0;font-size:13px;">Envio automatico abortado</p>
+        </div>
+        <div style="padding:24px 30px;">
+            <h2 style="color:#1a1f2e;margin:0 0 12px;font-size:17px;">No se envio el reporte</h2>
+            <p style="color:#444;margin:0 0 12px;font-size:14px;">
+                La sincronizacion con Obuma fallo y, para evitar mandar datos
+                desactualizados, el sistema decidio NO enviar el correo
+                programado. Ningun vendedor recibio reporte en este turno.
+            </p>
+            <table style="width:100%;border-collapse:collapse;margin:12px 0;">
+                <tr><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#555;width:160px;">Flujo afectado</td><td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;color:#1a1f2e;">{scope_safe}</td></tr>
+                <tr><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#555;">Fecha y hora</td><td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:600;color:#1a1f2e;">{occurred_at.strftime('%d/%m/%Y %H:%M')}</td></tr>
+                <tr><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#555;vertical-align:top;">Detalle tecnico</td><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#1a1f2e;font-family:monospace;font-size:12px;">{error_safe}</td></tr>
+            </table>
+            {suggestion_html}
+            <p style="color:#888;font-size:12px;margin-top:20px;padding-top:16px;border-top:1px solid #eee;">
+                Esta alerta se envia con cooldown de 1 hora por flujo para no inundar la bandeja si Obuma esta caido.
+            </p>
+        </div>
+    </div>
+    """
+
+
 def test_email_delivery(to_email: str) -> dict:
     """Send a real test email and return success/error info."""
     resend_key = os.environ.get("RESEND_API_KEY")

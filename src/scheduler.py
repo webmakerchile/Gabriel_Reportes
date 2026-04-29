@@ -15,6 +15,8 @@ from src.reports.email_service import (
     send_report_email,
     build_report_email_html,
     check_email_config,
+    send_admin_alert,
+    build_admin_alert_html,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,67 @@ TRACKED_VENDEDOR_IDS = ["28856", "28886", "28887", "28891", "28892"]
 
 # ── FIX 1: Singleton para evitar schedulers duplicados al reiniciar FastAPI ──
 _scheduler_instance = None
+
+# Anti-spam para alertas de fallo de sync: ultimo envio por scope.
+# Evita inundar la bandeja si Obuma esta caido por horas (1 alerta/scope/hora).
+ALERT_COOLDOWN_HOURS = 1.0
+_last_alert_sent_at: dict = {}
+
+
+def _send_sync_failure_alert(scope: str, error: Exception) -> None:
+    """Envia correo de alerta a ADMIN_ALERT_EMAILS cuando sync_for_report falla.
+
+    - No-op silencioso si no hay ADMIN_ALERT_EMAILS configurado o si no hay
+      proveedor de email (por eso send_admin_alert retorna skipped sin lanzar).
+    - Aplica cooldown de ALERT_COOLDOWN_HOURS por scope: si ya se envio una
+      alerta para ese flujo dentro de la ventana, se omite (solo log debug).
+    - Esta funcion NUNCA debe lanzar excepcion: el flujo de aborto del envio
+      ya esta en marcha y romper aqui empeoraria las cosas.
+    """
+    try:
+        now = datetime.now()
+        last = _last_alert_sent_at.get(scope)
+        if last is not None:
+            age_h = (now - last).total_seconds() / 3600.0
+            if age_h < ALERT_COOLDOWN_HOURS:
+                logger.debug(
+                    f"Alerta admin para '{scope}' omitida (cooldown {age_h:.2f}h < "
+                    f"{ALERT_COOLDOWN_HOURS}h)"
+                )
+                return
+
+        subject = f"[ALERTA] {scope} - sync con Obuma fallo, no se envio el reporte"
+        body = build_admin_alert_html(
+            scope=scope,
+            error_text=str(error)[:500],
+            occurred_at=now,
+            suggestion=(
+                "Revisa que la API de Obuma este accesible y que las credenciales "
+                "OBUMA_API_KEY / OBUMA_BASE_URL sigan validas. Cuando Obuma este OK, "
+                "puedes regenerar y reenviar el reporte manualmente desde el dashboard."
+            ),
+        )
+        result = send_admin_alert(subject, body)
+        if result.get("skipped"):
+            logger.warning(
+                f"Alerta admin para '{scope}' no enviada: {result.get('reason')}. "
+                f"Define ADMIN_ALERT_EMAILS para recibirla."
+            )
+        elif result.get("success"):
+            _last_alert_sent_at[scope] = now
+            logger.info(
+                f"Alerta admin enviada para '{scope}' (cooldown {ALERT_COOLDOWN_HOURS}h activo)"
+            )
+        else:
+            logger.error(
+                f"Alerta admin para '{scope}' fallo al enviarse: {result.get('error')}"
+            )
+    except Exception as alert_err:
+        # Nunca propagar — solo loguear.
+        logger.error(
+            f"Excepcion enviando alerta admin para '{scope}': {alert_err}",
+            exc_info=True,
+        )
 
 
 def scheduled_sync_and_report():
@@ -136,7 +199,8 @@ def _generate_and_send_individual_reports(db, date_from, date_to, scope: str = "
     """
     from src.models.models import ReporteProgramado, Empleado
 
-    # 1) Sync inmediato. Si falla, ABORTAMOS sin enviar nada.
+    # 1) Sync inmediato. Si falla, ABORTAMOS sin enviar nada y notificamos
+    #    al admin (correo a ADMIN_ALERT_EMAILS, con cooldown de 1h por scope).
     try:
         sync_for_report(db, scope=scope)
     except Exception as sync_err:
@@ -144,6 +208,7 @@ def _generate_and_send_individual_reports(db, date_from, date_to, scope: str = "
             f"{scope}: sync inmediato FALLO -- NO se envia ningun correo. Causa: {sync_err}",
             exc_info=True,
         )
+        _send_sync_failure_alert(scope, sync_err)
         return
 
     # 2) Reconciliacion post-sync (no bloqueante, solo audit log).
@@ -245,6 +310,7 @@ def process_scheduled_reports():
 
         # Sync inmediato + abort-on-failure UNA SOLA VEZ por tick (todos los
         # schedules due en este tick comparten los mismos datos frescos).
+        # Si falla, alertamos al admin (con cooldown) ademas del log.
         try:
             sync_for_report(db, scope="Reportes Programados")
         except Exception as sync_err:
@@ -254,6 +320,7 @@ def process_scheduled_reports():
                 f"omitidos en este tick. Causa: {sync_err}",
                 exc_info=True,
             )
+            _send_sync_failure_alert("Reportes Programados", sync_err)
             return
 
         # Reconciliacion post-sync (no bloqueante).

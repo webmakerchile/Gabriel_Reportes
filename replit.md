@@ -55,9 +55,14 @@ Política unificada para que Gabriel nunca reciba un correo con datos parciales 
   - `log_reconciliation_per_vendor(db, today, scope)`: loguea totales de cartera por vendedor trackeado vs `OBUMA_REFERENCE_TOTALS`.
   - `_sync_for_cartera_report(db)`: compat wrapper que llama a ambos.
 - **Aplicado en todos los flujos del scheduler** (`src/scheduler.py`):
-  - `_generate_and_send_individual_reports` (usado por `daily_weekday_reports`, `weekly_friday_reports`, `weekend_morning_reports`): sync inmediato al inicio; si falla, **NO se envía ningún correo** y se loguea ERROR.
-  - `process_scheduled_reports`: chequea schedules due primero; si hay alguno, hace UN solo sync inmediato + reconciliación, y solo si pasa procede con los envíos. Si falla, ABORTA todos los schedules due en ese tick.
+  - `_generate_and_send_individual_reports` (usado por `daily_weekday_reports`, `weekly_friday_reports`, `weekend_morning_reports`): sync inmediato al inicio; si falla, **NO se envía ningún correo**, se loguea ERROR y se dispara alerta admin (ver abajo).
+  - `process_scheduled_reports`: chequea schedules due primero; si hay alguno, hace UN solo sync inmediato + reconciliación, y solo si pasa procede con los envíos. Si falla, ABORTA todos los schedules due en ese tick y dispara alerta admin.
   - `generate_all_cartera_cobranza_reports(db, do_sync=True)`: igual comportamiento (return `[]` si sync falla).
+- **Alerta admin por correo cuando un envío se aborta** (`src/scheduler.py::_send_sync_failure_alert`):
+  - Cuando `sync_for_report` lanza, además del log ERROR se manda un correo corto (sin attachments, plantilla `build_admin_alert_html` en `email_service.py`) a la lista definida por la variable de entorno **`ADMIN_ALERT_EMAILS`** (separada por coma, ej. `gabriel@vlsur.cl,otro@vlsur.cl`).
+  - Si `ADMIN_ALERT_EMAILS` no está configurada, la alerta se omite silenciosamente (solo log WARN). El sistema sigue siendo funcional sin la alerta.
+  - **Anti-spam**: máximo 1 alerta por scope (`Reporte Diario Lun-Jue`, `Reporte Semanal Viernes`, `Reporte Fin de Semana`, `Reportes Programados`) cada `ALERT_COOLDOWN_HOURS = 1.0` horas. Evita inundar la bandeja si Obuma está caído por horas.
+  - El helper de alerta nunca lanza excepción — si falla el envío de la alerta, solo se loguea (el flujo de aborto del envío principal ya está en marcha).
 
 ## CRITICAL: Reporte Cartera/Cobranza
 - **Detección de staleness en path por-vendedor** (`generate_cartera_cobranza_report`):
