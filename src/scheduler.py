@@ -537,42 +537,106 @@ def _send_health_degraded_alert(reasons: list) -> None:
         )
 
 
+HEALTH_CHECK_TIMEOUT_SECONDS = 10.0
+
+
 def internal_health_check() -> dict:
-    """Job interno que revisa periodicamente el estado del sistema y dispara
-    alerta si esta degraded. Es el equivalente a un uptime check externo
-    pero corre dentro del mismo proceso FastAPI/scheduler.
+    """Job interno que sondea el endpoint HTTP `/api/health` y dispara alerta
+    si está degraded o no responde. Equivale a un uptime check externo
+    (UptimeRobot/BetterStack) corriendo dentro del mismo proceso.
 
-    Limitaciones a tener en cuenta (documentadas en replit.md):
-      - NO detecta el caso "todo el servidor caido" — para eso se necesita
-        un monitor externo (UptimeRobot/BetterStack) que llame a /api/health
-        desde fuera. Este job sólo cubre el caso "servidor arriba pero
-        algun componente clave en mal estado".
+    Por qué probar HTTP y no llamar los helpers directamente:
+      - Detecta también fallos a nivel ROUTING (FastAPI no expone la ruta),
+        PROXY (nginx mal configurado), TLS roto si se usa la URL pública,
+        timeouts (worker bloqueado), serialización JSON rota, etc.
+      - Si sólo llamáramos a check_email_config() y get_scheduler_status()
+        directamente, esos casos quedarían fuera.
 
-    Retorna el dict de estado para facilitar testing.
+    URL probada:
+      - `HEALTH_CHECK_URL` si está definida (recomendado en producción
+        apuntar al dominio público para cubrir TLS/proxy también).
+      - Fallback: `http://localhost:8000/api/health` (útil en dev y
+        suficiente para chequeos rápidos del proceso local).
+
+    Limitación a tener en cuenta (documentada en replit.md):
+      - Si el proceso entero muere (kernel panic, deploy roto, sin red
+        saliente), este job tampoco corre — para ese caso se documenta
+        cómo configurar un monitor externo (sección "Monitoreo del
+        endpoint de salud (interno + externo)" en replit.md).
+
+    Retorna {status, reasons} para facilitar testing.
     """
-    reasons = []
-    try:
-        email_cfg = check_email_config()
-    except Exception as e:
-        logger.error(f"internal_health_check: check_email_config fallo: {e}")
-        email_cfg = {"configured": False}
-    try:
-        sched_state = get_scheduler_status()
-    except Exception as e:
-        logger.error(f"internal_health_check: get_scheduler_status fallo: {e}")
-        sched_state = {"running": False, "state": "error"}
+    import httpx
 
-    if not email_cfg.get("configured"):
-        reasons.append("Servicio de correo NO configurado (sin RESEND_API_KEY/SENDGRID_API_KEY/SMTP)")
-    if not sched_state.get("running"):
-        reasons.append("Scheduler interno NO está corriendo (no se enviarán reportes automáticos)")
+    health_url = os.environ.get(
+        "HEALTH_CHECK_URL", "http://localhost:8000/api/health"
+    )
+    reasons = []
+    data = None
+
+    try:
+        resp = httpx.get(health_url, timeout=HEALTH_CHECK_TIMEOUT_SECONDS)
+        if resp.status_code != 200:
+            reasons.append(
+                f"Endpoint /api/health respondió HTTP {resp.status_code} "
+                f"(se esperaba 200)"
+            )
+        else:
+            try:
+                data = resp.json()
+            except Exception as e:
+                reasons.append(
+                    f"Endpoint /api/health devolvió respuesta no-JSON: {str(e)[:120]}"
+                )
+    except httpx.TimeoutException:
+        reasons.append(
+            f"Endpoint /api/health no respondió en {HEALTH_CHECK_TIMEOUT_SECONDS}s "
+            f"(timeout) — URL: {health_url}"
+        )
+    except httpx.ConnectError as e:
+        reasons.append(
+            f"Endpoint /api/health no responde (connection error: {str(e)[:120]}) "
+            f"— URL: {health_url}"
+        )
+    except Exception as e:
+        reasons.append(
+            f"Error consultando /api/health: {type(e).__name__}: {str(e)[:120]}"
+        )
+
+    # Si llegó respuesta, derivar razones específicas del JSON.
+    if data is not None and isinstance(data, dict):
+        json_status = data.get("status")
+        if json_status and json_status != "ok":
+            email_ok = bool(data.get("email", {}).get("configured"))
+            sched_ok = data.get("scheduler") == "ok"
+            if not email_ok:
+                reasons.append(
+                    "Servicio de correo NO configurado "
+                    "(sin RESEND_API_KEY/SENDGRID_API_KEY/SMTP)"
+                )
+            if not sched_ok:
+                reasons.append(
+                    "Scheduler interno NO está corriendo "
+                    "(no se enviarán reportes automáticos)"
+                )
+            if email_ok and sched_ok:
+                # JSON dice degraded pero email+scheduler ok: razón desconocida.
+                reasons.append(
+                    f"Endpoint reportó status='{json_status}' sin componente identificable"
+                )
+        elif not json_status:
+            reasons.append(
+                "Endpoint /api/health devolvió JSON sin campo 'status'"
+            )
 
     status = "degraded" if reasons else "ok"
     if status == "degraded":
-        logger.warning(f"internal_health_check: estado DEGRADED. Razones: {reasons}")
+        logger.warning(
+            f"internal_health_check: estado DEGRADED. Razones: {reasons}"
+        )
         _send_health_degraded_alert(reasons)
     else:
-        logger.debug("internal_health_check: estado OK")
+        logger.debug("internal_health_check: estado OK (probe %s)", health_url)
 
     return {"status": status, "reasons": reasons}
 
