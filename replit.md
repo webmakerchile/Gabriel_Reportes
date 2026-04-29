@@ -7,7 +7,7 @@ Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de
 - Priorizar la **exactitud y puntualidad de los reportes Excel**.
 - Para reportes de **cartera/cobranza** se exige sincronización inmediata antes de generar (los datos del día deben estar incluidos).
 - **Manejo de "Nota Crédito" depende del tipo de reporte** (ver sección CRITICAL más abajo). NO aplicar una sola regla universal.
-- **Excluir documentos "Tipo 4"** (pre-facturas) de todo análisis de ventas. Solo se aceptan los `VALID_DOC_TYPES` definidos en `src/reports/excel_generator.py`: `BILLING_DOC_TYPES = ["Factura Electr.", "Factura Exenta", "Boleta Electr."]` + `NC_DOC_TYPES = ["Nota Credito"]`.
+- **Excluir documentos "Tipo 4"** (pre-facturas) de todo análisis de ventas. Solo se aceptan los `VALID_DOC_TYPES` definidos en `src/reports/excel_generator.py`: `BILLING_DOC_TYPES = ["Factura Electr.", "Factura Exenta", "Boleta Electr."]` + `NC_DOC_TYPES = ["Nota Credito"]` + `ND_DOC_TYPES = ["Nota Debito"]`.
 
 ## System Architecture
 
@@ -23,19 +23,24 @@ Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de
 
 **Dashboard**: filtros globales (fechas, vendedor), KPIs, gráficos de ventas/rentabilidad/cobranza/top productos.
 
-## CRITICAL: Manejo de Nota Crédito (NC) por tipo de reporte
+## CRITICAL: Manejo de Nota Crédito (NC) y Nota Débito (ND) por tipo de reporte
 
-**Las NC se tratan distinto según el reporte. Esto NO es contradicción — refleja cómo Obuma las muestra en cada pantalla.**
+**Las NC se tratan distinto según el reporte. Esto NO es contradicción — refleja cómo Obuma las muestra en cada pantalla. Las ND, en cambio, se tratan SIEMPRE como cargo positivo (igual que una Factura) en todos los reportes.**
 
 ### En reportes de VENTAS / MARGEN / DASHBOARD (vendedor mensual, top productos, KPIs)
-- Las NC **se restan** de los totales de venta (representan devoluciones / anulaciones de ingresos).
-- Implementado en `excel_generator.py` (reportes de vendedor) y `dashboard/app.py` filtrando por `VALID_DOC_TYPES` y aplicando signo negativo a NC.
+- Las **NC se restan** de los totales de venta (representan devoluciones / anulaciones de ingresos).
+- Las **ND suman positivo** (representan cargos adicionales al cliente: intereses, recargos, ajustes a favor de la empresa).
+- Implementado en `excel_generator.py` (reportes de vendedor) y `dashboard/app.py` filtrando por `VALID_DOC_TYPES` y aplicando signo negativo solo a NC. ND quedan en la rama positiva por defecto del `case`.
 
 ### En reporte CARTERA / COBRANZA (Facturas por Cobrar)
-- Las NC **se muestran POSITIVAS** en la columna POR PAGAR, exactamente como aparecen en la pantalla "Facturas por Cobrar" de Obuma.
-- Razón: el campo `total_por_pagar` que devuelve Obuma para una NC pendiente ya representa el saldo a favor del cliente; restarla de nuevo sería doble conteo.
-- El TOTAL GENERAL del reporte = suma directa de la columna POR PAGAR (sin negar NCs).
-- Visualmente las NCs se distinguen con font italic rojo (NC_FONT) en la fila para que el usuario las identifique sin confundir el valor.
+- Tanto **NC como ND** se muestran POSITIVAS en la columna POR PAGAR, exactamente como aparecen en la pantalla "Facturas por Cobrar" de Obuma.
+- Para **NC**: el campo `total_por_pagar` que devuelve Obuma ya representa el saldo a favor del cliente; restarla sería doble conteo.
+- Para **ND**: es deuda real adicional del cliente, igual que una factura.
+- El TOTAL GENERAL del reporte = suma directa de la columna POR PAGAR (sin negar nada).
+- Visualmente:
+  - NCs: font italic rojo (`NC_FONT`) — saldo a favor del cliente.
+  - NDs: font azul oscuro bold (`ND_FONT`) — cargo adicional al cliente.
+  - Facturas/Boletas: font normal negro.
 
 ## CRITICAL: Reporte Cartera/Cobranza
 

@@ -64,7 +64,15 @@ MONTH_NAMES = [
 
 BILLING_DOC_TYPES = ["Factura Electr.", "Factura Exenta", "Boleta Electr."]
 NC_DOC_TYPES = ["Nota Credito"]
-VALID_DOC_TYPES = BILLING_DOC_TYPES + NC_DOC_TYPES
+# Notas de Debito: cargos adicionales al cliente (intereses, recargos, ajustes
+# a favor de la empresa). En Obuma "Facturas por Cobrar" aparecen como deuda
+# pendiente igual que las facturas. Tratamiento:
+#  - Cartera/Cobranza: SUMAN positivo en POR PAGAR (igual que Facturas).
+#  - Ventas/Margen/Dashboard: SUMAN positivo (representan ingreso adicional).
+# (Diferente de NC, que en ventas RESTA y en cartera tambien se muestra positiva
+# pero por otra razon: el saldo a favor del cliente.)
+ND_DOC_TYPES = ["Nota Debito"]
+VALID_DOC_TYPES = BILLING_DOC_TYPES + NC_DOC_TYPES + ND_DOC_TYPES
 
 # Totales de referencia capturados manualmente desde la pantalla
 # "Facturas por Cobrar" de Obuma para cada vendedor trackeado.
@@ -937,6 +945,9 @@ RESUMEN_TOTAL_FONT = Font(name="Calibri", bold=True, size=13, color="FF1F4E79")
 RESUMEN_FILL = PatternFill(start_color="FFEAF1F8", end_color="FFEAF1F8", fill_type="solid")
 
 NC_FONT = Font(name="Calibri", size=11, color="FFC00000", italic=True)
+# ND (Nota de Debito): azul oscuro, sin italic, para distinguir de NC (rojo italic)
+# y Facturas (negro). Suma positivo en POR PAGAR igual que las facturas.
+ND_FONT = Font(name="Calibri", size=11, color="FF1F4E79", bold=True)
 ESTADO_VENCIDO_FONT = Font(name="Calibri", size=11, color="FFC00000", bold=True)
 ESTADO_PORVENCER_FONT = Font(name="Calibri", size=11, color="FF548235", bold=True)
 ESTADO_SINVCTO_FONT = Font(name="Calibri", size=11, color="FF7F7F7F", italic=True)
@@ -994,9 +1005,11 @@ def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
         dias = (report_date - fecha_emi).days if fecha_emi else None
 
         es_nc = venta.tipo_documento in NC_DOC_TYPES
+        es_nd = venta.tipo_documento in ND_DOC_TYPES
         por_pagar_real = float(venta.total_por_pagar or 0)
         # NC: se mantiene POSITIVO (igual que Obuma "Facturas por Cobrar").
-        # El indicador visual de NC se muestra via tipo_documento + font italic rojo.
+        # ND: se mantiene POSITIVO (cargo adicional al cliente, igual que Factura).
+        # Distincion visual: NC -> font italic rojo, ND -> font azul oscuro bold.
 
         estado = _estado_documento(fecha_vto, report_date)
         # Dias hasta/desde vencimiento (positivo = vencido, negativo = por vencer)
@@ -1016,6 +1029,7 @@ def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
             "vendedor_nombre": (empleado.nombre if empleado else f"Vendedor {vendedor_obuma_id}"),
             "por_pagar": por_pagar_real,
             "es_nc": es_nc,
+            "es_nd": es_nd,
         })
 
     # Orden: cliente asc, luego dias_atraso desc (None al final dentro del cliente)
@@ -1475,6 +1489,8 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
                 cell.number_format = CURRENCY_FORMAT
                 if r["es_nc"]:
                     cell.font = NC_FONT
+                elif r.get("es_nd"):
+                    cell.font = ND_FONT
             # Centrar columnas de fechas y dias
             if i in (COL_FECHA_EMI, COL_FECHA_VTO, COL_FECHA_HOY, COL_DIAS_ATRASO):
                 cell.alignment = Alignment(horizontal="center")

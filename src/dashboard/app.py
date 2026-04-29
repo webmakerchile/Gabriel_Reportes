@@ -16,7 +16,10 @@ TRACKED_VENDEDOR_IDS = ["28856", "28886", "28887", "28891", "28892"]
 
 BILLING_DOC_TYPES_G = ['Factura Electr.', 'Factura Exenta', 'Boleta Electr.']
 NC_DOC_TYPES_G = ['Nota Credito']
-VALID_DOC_TYPES_G = BILLING_DOC_TYPES_G + NC_DOC_TYPES_G
+# Notas de Debito: cargos adicionales al cliente. Suman positivo en ventas y
+# en cartera (igual que Facturas). Ver excel_generator.py para detalle.
+ND_DOC_TYPES_G = ['Nota Debito']
+VALID_DOC_TYPES_G = BILLING_DOC_TYPES_G + NC_DOC_TYPES_G + ND_DOC_TYPES_G
 
 from src.database import SessionLocal, engine, Base
 from src.models.models import (
@@ -602,11 +605,16 @@ if page == "Dashboard":
                     if f"{e.nombre} ({e.cargo or 'Sin cargo'})" == sel:
                         selected_vendedor_ids.append(e.obuma_id)
 
-        BILLING_DOC_TYPES = ['Factura Electr.', 'Factura Exenta', 'Boleta Electr.']
-        NC_DOC_TYPES = ['Nota Credito']
-        VALID_DOC_TYPES = BILLING_DOC_TYPES + NC_DOC_TYPES
+        # Usamos las constantes globales VALID_DOC_TYPES_G / NC_DOC_TYPES_G / ND_DOC_TYPES_G
+        # definidas al tope del archivo. Reasignamos a nombres locales para mantener
+        # legibilidad del bloque pero SIN re-excluir ND.
+        BILLING_DOC_TYPES = BILLING_DOC_TYPES_G
+        NC_DOC_TYPES = NC_DOC_TYPES_G
+        ND_DOC_TYPES = ND_DOC_TYPES_G
+        VALID_DOC_TYPES = VALID_DOC_TYPES_G
 
         def neto_sum():
+            # NC resta del neto, ND y Facturas suman positivo (rama else_).
             from sqlalchemy import case as sql_case
             return func.sum(
                 sql_case(
