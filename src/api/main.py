@@ -14,6 +14,7 @@ from src.models.models import (
 )
 from src.etl.sync_service import SyncService
 from src.reports.excel_generator import generate_all_vendedor_reports
+from src.reports.email_service import log_admin_alert_config_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -244,6 +245,11 @@ def _heavy_init():
 
 @app.on_event("startup")
 async def on_startup():
+    # Aviso explicito y temprano del estado de las alertas a admin.
+    # Si ADMIN_ALERT_EMAILS esta vacia, nadie recibira aviso cuando
+    # un envio automatico se aborte por fallo de Obuma — debe quedar
+    # bien visible en los logs de arranque.
+    log_admin_alert_config_status(logger)
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _heavy_init)
     logger.info("FastAPI started - heavy init running in separate thread")

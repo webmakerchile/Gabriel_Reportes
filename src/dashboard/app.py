@@ -34,7 +34,7 @@ from src.models.models import (
 from src.etl.sync_service import SyncService
 from src.etl.obuma_client import ObumaClient
 from src.reports.excel_generator import generate_vendedor_report, generate_all_vendedor_reports
-from src.reports.email_service import send_report_email, build_report_email_html, check_email_config, test_email_delivery
+from src.reports.email_service import send_report_email, build_report_email_html, check_email_config, test_email_delivery, check_admin_alert_config
 from src.models.models import ReporteProgramado
 
 Base.metadata.create_all(bind=engine)
@@ -550,6 +550,38 @@ page = st.sidebar.radio(
     index=0,
     label_visibility="collapsed"
 )
+
+st.sidebar.markdown("---")
+
+_admin_alert_cfg = check_admin_alert_config()
+if _admin_alert_cfg["configured"]:
+    _alert_emails_str = ", ".join(_admin_alert_cfg["emails"])
+    st.sidebar.markdown(
+        f"""
+        <div style="padding:8px 10px;border-radius:8px;background:rgba(16,185,129,0.10);
+                    border-left:3px solid #10b981;font-size:0.78rem;line-height:1.35;">
+            <div style="font-weight:700;color:#10b981;">Alertas admin: ON</div>
+            <div style="color:#94a3b8;margin-top:2px;" title="{_alert_emails_str}">
+                {len(_admin_alert_cfg["emails"])} destinatario{'' if len(_admin_alert_cfg["emails"]) == 1 else 's'}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.sidebar.markdown(
+        """
+        <div style="padding:8px 10px;border-radius:8px;background:rgba(239,68,68,0.10);
+                    border-left:3px solid #ef4444;font-size:0.78rem;line-height:1.35;">
+            <div style="font-weight:700;color:#ef4444;">Alertas admin: OFF</div>
+            <div style="color:#94a3b8;margin-top:2px;">
+                Define <code>ADMIN_ALERT_EMAILS</code> para recibir avisos
+                cuando un reporte automatico no se envie.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.sidebar.markdown("---")
 st.sidebar.caption("v2.0 | Powered by Obuma ERP")
@@ -2960,6 +2992,44 @@ elif page == "Reportes":
                         <div>
                             <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">Email No Configurado</p>
                             <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">{email_cfg['detail']}</p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Estado de las alertas a admin (ADMIN_ALERT_EMAILS)
+            _admin_cfg_tab = check_admin_alert_config()
+            if _admin_cfg_tab["configured"]:
+                _emails_html = ", ".join(_admin_cfg_tab["emails"])
+                st.markdown(f"""
+                <div class="metric-card" style="border-left:4px solid {ACCENT_GREEN};">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <span style="font-size:2rem;">🔔</span>
+                        <div>
+                            <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">Alertas a Admin: ON</p>
+                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
+                                Recibiran aviso si un envio automatico se aborta por fallo de Obuma:
+                                <strong>{_emails_html}</strong>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="metric-card" style="border-left:4px solid {ACCENT_RED};">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <span style="font-size:2rem;">🔕</span>
+                        <div>
+                            <p style="color:{TEXT_PRIMARY};font-weight:600;margin:0;">Alertas a Admin: OFF</p>
+                            <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:4px 0 0;">
+                                {_admin_cfg_tab['reason']}. Si Obuma falla y un reporte automatico se aborta,
+                                <strong>nadie recibira aviso por correo</strong> (solo quedara en logs).
+                                Define <code>ADMIN_ALERT_EMAILS</code> (CSV de correos) en el entorno
+                                para habilitar esta alerta.
+                            </p>
                         </div>
                     </div>
                 </div>

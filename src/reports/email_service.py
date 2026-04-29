@@ -208,6 +208,75 @@ def check_email_config() -> dict:
         return {"configured": False, "method": None, "detail": "Sin configurar.", "sandbox": False, "from_email": None}
 
 
+def check_admin_alert_config() -> dict:
+    """Devuelve el estado de la configuracion de alertas a admin.
+
+    Lee `ADMIN_ALERT_EMAILS` (CSV) y reporta si esta configurada con uno o
+    mas correos validos. Es usada al arrancar el servidor (para loguear el
+    estado) y por el dashboard (para mostrar el indicador ON/OFF).
+
+    Retorna un dict con:
+      - configured (bool): True si hay al menos un correo valido.
+      - emails (list[str]): lista de correos parseados (puede estar vacia).
+      - raw (str): valor crudo de la variable (para diagnostico).
+      - reason (str): explicacion corta cuando configured=False.
+    """
+    raw = os.environ.get("ADMIN_ALERT_EMAILS", "")
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return {
+            "configured": False,
+            "emails": [],
+            "raw": raw,
+            "reason": "ADMIN_ALERT_EMAILS no esta definida",
+        }
+    emails = [
+        e.strip()
+        for e in raw_stripped.replace("\n", ",").split(",")
+        if e.strip() and "@" in e.strip()
+    ]
+    if not emails:
+        return {
+            "configured": False,
+            "emails": [],
+            "raw": raw,
+            "reason": "ADMIN_ALERT_EMAILS no contiene correos validos",
+        }
+    return {
+        "configured": True,
+        "emails": emails,
+        "raw": raw,
+        "reason": "",
+    }
+
+
+def log_admin_alert_config_status(logger_obj=None) -> dict:
+    """Imprime en logs un mensaje explicito sobre el estado de ADMIN_ALERT_EMAILS.
+
+    Pensada para llamarse al arrancar el servidor (FastAPI startup) para que
+    quede MUY visible si nadie va a recibir alertas cuando un envio se aborte.
+    Devuelve el mismo dict que `check_admin_alert_config()` por conveniencia.
+    """
+    log = logger_obj if logger_obj is not None else logger
+    cfg = check_admin_alert_config()
+    if cfg["configured"]:
+        emails_str = ", ".join(cfg["emails"])
+        log.info(
+            "ALERTAS DE ADMIN: configuradas para %s (%d destinatario%s)",
+            emails_str,
+            len(cfg["emails"]),
+            "" if len(cfg["emails"]) == 1 else "s",
+        )
+    else:
+        log.warning(
+            "ALERTAS DE ADMIN: NO CONFIGURADAS (%s) - define ADMIN_ALERT_EMAILS "
+            "(CSV de correos) para recibir avisos cuando un reporte automatico "
+            "no se envie por fallo de sync con Obuma.",
+            cfg["reason"],
+        )
+    return cfg
+
+
 def send_admin_alert(subject: str, body_html: str) -> dict:
     """Envia un correo corto de ALERTA a la lista de admins definida en
     la variable de entorno ADMIN_ALERT_EMAILS (separada por coma).
@@ -219,13 +288,10 @@ def send_admin_alert(subject: str, body_html: str) -> dict:
     o no hay servicio de email, retorna {"success": False, "skipped": True}
     sin levantar excepcion (no debe romper nunca el flujo llamador).
     """
-    admin_csv = os.environ.get("ADMIN_ALERT_EMAILS", "").strip()
-    if not admin_csv:
-        return {"success": False, "skipped": True, "reason": "ADMIN_ALERT_EMAILS no configurado"}
-
-    admin_emails = [e.strip() for e in admin_csv.replace("\n", ",").split(",") if e.strip() and "@" in e.strip()]
-    if not admin_emails:
-        return {"success": False, "skipped": True, "reason": "ADMIN_ALERT_EMAILS sin emails validos"}
+    cfg = check_admin_alert_config()
+    if not cfg["configured"]:
+        return {"success": False, "skipped": True, "reason": cfg["reason"]}
+    admin_emails = cfg["emails"]
 
     try:
         # Reusa send_report_email sin attachments. Esa funcion ya selecciona

@@ -63,6 +63,8 @@ Política unificada para que Gabriel nunca reciba un correo con datos parciales 
   - Si `ADMIN_ALERT_EMAILS` no está configurada, la alerta se omite silenciosamente (solo log WARN). El sistema sigue siendo funcional sin la alerta.
   - **Anti-spam**: máximo 1 alerta por scope (`Reporte Diario Lun-Jue`, `Reporte Semanal Viernes`, `Reporte Fin de Semana`, `Reportes Programados`) cada `ALERT_COOLDOWN_HOURS = 1.0` horas. Evita inundar la bandeja si Obuma está caído por horas.
   - El helper de alerta nunca lanza excepción — si falla el envío de la alerta, solo se loguea (el flujo de aborto del envío principal ya está en marcha).
+  - **Aviso de configuración al arrancar** (`src/api/main.py::on_startup` → `email_service.log_admin_alert_config_status`): cada vez que arranca FastAPI, se loguea una línea explícita con el estado de `ADMIN_ALERT_EMAILS` (`INFO` si está configurada con la lista de destinatarios; `WARNING` muy visible si no lo está). El helper de chequeo es `email_service.check_admin_alert_config()` y devuelve `{configured, emails, reason}`.
+  - **Indicador visible en el dashboard**: el sidebar de Streamlit (`src/dashboard/app.py`) muestra una badge "Alertas admin: ON" (verde, con cantidad de destinatarios) o "Alertas admin: OFF" (rojo, con instrucción para definir `ADMIN_ALERT_EMAILS`) en cada vista. La pestaña "Configuracion de Email" repite el mismo estado con más detalle.
 
 ## CRITICAL: Reporte Cartera/Cobranza
 - **Detección de staleness en path por-vendedor** (`generate_cartera_cobranza_report`):
