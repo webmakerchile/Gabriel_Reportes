@@ -1,7 +1,7 @@
 # BI Platform - Gabriel Hoyos
 
 ## Overview
-Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de múltiples clientes en el ERP Obuma. Audita y reporta rentabilidad, ventas, costos y desempeño de los 5 vendedores trackeados, generando reportes Excel automatizados y un dashboard web.
+This project is a Business Intelligence platform designed for Gabriel Hoyos (VLSur), who manages multiple clients within the Obuma ERP. Its primary purpose is to audit and report on profitability, sales, costs, and performance for five tracked salespeople. The platform automates Excel report generation and provides a web-based dashboard. The business vision is to provide comprehensive insights into sales and financial performance, enabling better decision-making and optimizing operations for VLSur's clients.
 
 ## User Preferences
 - Priorizar la **exactitud y puntualidad de los reportes Excel**.
@@ -12,135 +12,46 @@ Plataforma de Business Intelligence para Gabriel Hoyos (VLSur), administrador de
 ## System Architecture
 
 **Stack**
-- **Backend**: FastAPI (puerto 8000)
-- **Frontend**: Streamlit (puerto 5000)
-- **DB**: PostgreSQL (single source of truth, 28 modelos, multi-tenant)
-- **ETL**: módulo Python que consume API Obuma (21 endpoints sincronizando)
-- **Scheduler**: APScheduler — sync ligero diario 18:30 hora Chile + envíos automáticos:
-  - **Lun-Jue 23:00**: reportes diarios por vendedor (sync inmediato + abort-on-failure)
-  - **Viernes 23:00**: reporte semanal por vendedor (sync inmediato + abort-on-failure)
-  - **Sáb-Dom 09:00**: reportes de fin de semana (sync inmediato + abort-on-failure)
-  - **Cada 15 min**: `process_scheduled_reports` chequea schedules custom; si hay alguno due hace UN solo sync inmediato + abort y luego envía todos los due en ese tick.
-  - **Cada 5 min**: `internal_health_check` revisa estado del sistema (correo + scheduler) y si está `degraded` envía alerta a `ADMIN_ALERT_EMAILS` (con cooldown 1h, mismo scope: `Salud del Sistema`).
-- **Reports**: `src/reports/excel_generator.py` (openpyxl) + `src/reports/email_service.py` (Resend, `EMAIL_FROM=reportes@autoreportes.cl`)
+- **Backend**: FastAPI (port 8000)
+- **Frontend**: Streamlit (port 5000)
+- **Database**: PostgreSQL (single source of truth, multi-tenant)
+- **ETL**: Python module consuming Obuma API (21 endpoints for synchronization)
+- **Scheduler**: APScheduler for daily light syncs and automated report deliveries. It ensures immediate synchronization before report generation and aborts if sync fails, preventing partial data delivery. An internal health check runs every 5 minutes, alerting admins if the system is degraded.
 
-**Estilos Excel**: amarillo en celdas en cero, verde en segmento ABC, encabezados azul/blanco.
+**Reports**: Generated via `src/reports/excel_generator.py` (using openpyxl) and sent via email using `src/reports/email_service.py` (Resend). Excel reports utilize specific styling (yellow for zero cells, green for ABC segments, blue/white headers).
 
-**Dashboard**: filtros globales (fechas, vendedor), KPIs, gráficos de ventas/rentabilidad/cobranza/top productos.
+**Dashboard**: Features global filters (dates, salesperson), KPIs, and charts for sales, profitability, collections, and top products.
 
-## CRITICAL: Manejo de Nota Crédito (NC) y Nota Débito (ND) por tipo de reporte
+**Critical Handling of Credit/Debit Notes**:
+- **Sales/Margin/Dashboard Reports**: Credit Notes (NC) are subtracted from sales totals, and Debit Notes (ND) are added as positive charges. This logic is implemented in `excel_generator.py` and `dashboard/app.py`.
+- **Collections/Accounts Receivable Reports**: Both NC and ND are shown as positive values in the "Amount Due" column, mirroring Obuma's display. NCs are styled with italic red font, NDs with bold dark blue font, and other documents in normal black.
 
-**Las NC se tratan distinto según el reporte. Esto NO es contradicción — refleja cómo Obuma las muestra en cada pantalla. Las ND, en cambio, se tratan SIEMPRE como cargo positivo (igual que una Factura) en todos los reportes.**
+**Critical Immediate Sync + Abort-on-Failure**:
+- All automatic report dispatches (daily, weekly, scheduled) perform an immediate, blocking sync (`sync_for_report`). If any part of the sync fails, the report dispatch is aborted, an error is logged, and an administrative alert is sent. This prevents partial or outdated reports from being sent.
+- Admin alerts for sync failures are sent to `ADMIN_ALERT_EMAILS` with anti-spam cooldowns.
 
-### En reportes de VENTAS / MARGEN / DASHBOARD (vendedor mensual, top productos, KPIs)
-- Las **NC se restan** de los totales de venta (representan devoluciones / anulaciones de ingresos).
-- Las **ND suman positivo** (representan cargos adicionales al cliente: intereses, recargos, ajustes a favor de la empresa).
-- Implementado en `excel_generator.py` (reportes de vendedor) y `dashboard/app.py` filtrando por `VALID_DOC_TYPES` y aplicando signo negativo solo a NC. ND quedan en la rama positiva por defecto del `case`.
+**Critical Accounts Receivable Report**:
+- Includes checks for data staleness.
+- Filters by `vendedor_id`, valid document types, positive amounts due, and non-cancelled documents.
+- Excel structure includes a **SUMMARY** (total outstanding, overdue, non-overdue, no due date), **DISTRIBUTION BY DUE DAYS** (ranges with quantity, amount, %), and a detailed **DETAIL** section (11 columns, grouped by client with subtotals). Row colors in the detail section indicate days since emission (green for 30-45 days, orange for 46-60, red for 61+).
 
-### En reporte CARTERA / COBRANZA (Facturas por Cobrar)
-- Tanto **NC como ND** se muestran POSITIVAS en la columna POR PAGAR, exactamente como aparecen en la pantalla "Facturas por Cobrar" de Obuma.
-- Para **NC**: el campo `total_por_pagar` que devuelve Obuma ya representa el saldo a favor del cliente; restarla sería doble conteo.
-- Para **ND**: es deuda real adicional del cliente, igual que una factura.
-- El TOTAL GENERAL del reporte = suma directa de la columna POR PAGAR (sin negar nada).
-- Visualmente:
-  - NCs: font italic rojo (`NC_FONT`) — saldo a favor del cliente.
-  - NDs: font azul oscuro bold (`ND_FONT`) — cargo adicional al cliente.
-  - Facturas/Boletas: font normal negro.
+**Salesperson Mapping**:
+- For **accounts receivable (client assignment)**: `ClienteFinal.data_json.rel_usuario_id`.
+- For **individual sales (invoices, receipts, NCs)**: `VentaHistorico.vendedor_id` (mapping to `detalle.rel_vendedor_id` from Obuma's raw JSON). This ensures the actual salesperson for the document is tracked.
 
-## CRITICAL: Sync inmediato + abort-on-failure (TODOS los envíos automáticos)
+**Tracked Salespeople (5)**: Gabriel, Jhonatan, Ernesto, Pablo, Jesús. Product classification (Machinery vs. Spare Parts) is based on SKU prefixes.
 
-Política unificada para que Gabriel nunca reciba un correo con datos parciales o desactualizados:
-
-- **Helpers compartidos en `src/reports/excel_generator.py`**:
-  - `sync_for_report(db, scope)`: ejecuta `sync_clientes` → `sync_ventas` → `sync_ventas_items_incremental(YYYY-01-01..hoy)` → `sync_ventas_cobros`. Los 4 son **bloqueantes**: si cualquiera falla levanta `RuntimeError` y los flujos llamadores abortan el envío sin mandar correo.
-  - `log_reconciliation_per_vendor(db, today, scope)`: loguea totales de cartera por vendedor trackeado vs `OBUMA_REFERENCE_TOTALS`.
-  - `_sync_for_cartera_report(db)`: compat wrapper que llama a ambos.
-- **Aplicado en todos los flujos del scheduler** (`src/scheduler.py`):
-  - `_generate_and_send_individual_reports` (usado por `daily_weekday_reports`, `weekly_friday_reports`, `weekend_morning_reports`): sync inmediato al inicio; si falla, **NO se envía ningún correo**, se loguea ERROR y se dispara alerta admin (ver abajo).
-  - `process_scheduled_reports`: chequea schedules due primero; si hay alguno, hace UN solo sync inmediato + reconciliación, y solo si pasa procede con los envíos. Si falla, ABORTA todos los schedules due en ese tick y dispara alerta admin.
-  - `generate_all_cartera_cobranza_reports(db, do_sync=True)`: igual comportamiento (return `[]` si sync falla).
-- **Alerta admin por correo cuando un envío se aborta** (`src/scheduler.py::_send_sync_failure_alert`):
-  - Cuando `sync_for_report` lanza, además del log ERROR se manda un correo corto (sin attachments, plantilla `build_admin_alert_html` en `email_service.py`) a la lista definida por la variable de entorno **`ADMIN_ALERT_EMAILS`** (separada por coma, ej. `gabriel@vlsur.cl,otro@vlsur.cl`).
-  - Si `ADMIN_ALERT_EMAILS` no está configurada, la alerta se omite silenciosamente (solo log WARN). El sistema sigue siendo funcional sin la alerta.
-  - **Anti-spam**: máximo 1 alerta por scope (`Reporte Diario Lun-Jue`, `Reporte Semanal Viernes`, `Reporte Fin de Semana`, `Reportes Programados`) cada `ALERT_COOLDOWN_HOURS = 1.0` horas. Evita inundar la bandeja si Obuma está caído por horas.
-  - El helper de alerta nunca lanza excepción — si falla el envío de la alerta, solo se loguea (el flujo de aborto del envío principal ya está en marcha).
-  - **Aviso de configuración al arrancar** (`src/api/main.py::on_startup` → `email_service.log_admin_alert_config_status`): cada vez que arranca FastAPI, se loguea una línea explícita con el estado de `ADMIN_ALERT_EMAILS` (`INFO` si está configurada con la lista de destinatarios; `WARNING` muy visible si no lo está). El helper de chequeo es `email_service.check_admin_alert_config()` y devuelve `{configured, emails, reason}`.
-  - **Indicador visible en el dashboard**: el sidebar de Streamlit (`src/dashboard/app.py`) muestra una badge "Alertas admin: ON" (verde, con cantidad de destinatarios) o "Alertas admin: OFF" (rojo, con instrucción para definir `ADMIN_ALERT_EMAILS`) en cada vista. La pestaña "Configuracion de Email" repite el mismo estado con más detalle.
-
-## CRITICAL: Reporte Cartera/Cobranza
-- **Detección de staleness en path por-vendedor** (`generate_cartera_cobranza_report`):
-  - Si la última sincronización de `Ventas` en `ObumaApiEndpoint.ultima_sync` tiene > 2 horas, emite WARNING en logs (la entrada batch normal hace sync inmediato; este check solo cubre llamadas directas que pudieran bypassear el batch).
-- **Filtros**: `vendedor_id`, `tipo_documento ∈ VALID_DOC_TYPES`, `total_por_pagar > 0`, `anulada == False`.
-- **Estructura Excel**:
-  1. **RESUMEN**: total a cobrar (#docs), total vencido (con %), total no vencido (con %), sin vencimiento.
-  2. **DISTRIBUCIÓN POR DÍAS DE VENCIMIENTO**: rangos Vencido >90 / 61-90 / 31-60 / 1-30, Vence hoy, Por vencer 1-30 / 31-60 / 61-90 / >90, Sin vencimiento. Cada fila: cantidad, monto, % del total. Coloreado por criticidad.
-  3. **DETALLE** (11 columnas): DOCUMENTO, FOLIO, FECHA, FECHA VCTO, ESTADO (Vencido/Por vencer/Sin vencimiento), FECHA HOY, DÍAS ATRASO, CLIENTE, CLIENTE RUT, VENDEDOR, POR PAGAR. Agrupado por cliente con subtotal gris + TOTAL GENERAL final.
-- **Semáforo del DETALLE** (color de fila): días desde **EMISIÓN**. <30 sin color, 30-45 verde, 46-60 naranja, 61+ rojo. (Gabriel pidió mantener este criterio aunque el ESTADO se calcule por vencimiento.)
-
-## CRITICAL: Mapeo de vendedor (regla central)
-- **Para CARTERA (asignación de cliente)**: usar `ClienteFinal.data_json.rel_usuario_id`. Auto-poblado en `VendedorCartera` durante `sync_clientes` para los 5 vendedores trackeados.
-- **Para VENTAS individuales (facturas, boletas, NCs)**: usar `VentaHistorico.vendedor_id` (columna BD), que mapea a `detalle.rel_vendedor_id` en el JSON crudo de Obuma. Es el vendedor REAL del documento (NO `rel_usuario_id`, que es quien creó el documento — cajero/operador).
-- Verificación: 30 registros aleatorios → coincidencia 30/30.
-
-## Vendedores trackeados (5)
-| Obuma ID | Nombre   | Metas mensuales (Repuestos / Maquinaria) |
-|----------|----------|------------------------------------------|
-| 28856    | Gabriel  | configuradas en `VendedorMeta`           |
-| 28886    | Jhonatan | configuradas en `VendedorMeta`           |
-| 28887    | Ernesto  | configuradas en `VendedorMeta`           |
-| 28891    | Pablo    | configuradas en `VendedorMeta`           |
-| 28892    | Jesús    | configuradas en `VendedorMeta`           |
-
-Clasificación de producto (Maquinaria vs Repuestos): por prefijo de SKU.
-
-## Feature Specifications
-- ETL completo: 21 endpoints activos de Obuma.
-- Tablas históricas: `ventas_historico`, `costos_historico`, `compras_historico`.
-- Cálculo de margen neto: cruce ventas × costos de adquisición.
-- Auditoría: comparación totales API vs PostgreSQL.
-- Catálogo API: 30 endpoints registrados en `ObumaApiEndpoint` para procesos automatizados.
-- Almacenamiento JSON crudo: campo `data_json` en cada modelo.
+**Feature Specifications**:
+- Complete ETL with 21 active Obuma endpoints.
+- Historical tables for sales, costs, and purchases.
+- Net margin calculation by cross-referencing sales and acquisition costs.
+- Audit functionality comparing API totals with PostgreSQL data.
+- 30 API endpoints registered for automated processes.
+- Raw JSON data stored in a `data_json` field for each model.
 
 ## External Dependencies
 - **Obuma ERP API**: `OBUMA_API_KEY`, `OBUMA_BASE_URL`.
-- **PostgreSQL**: BD primaria.
-- **Resend**: envío de correos (`RESEND_API_KEY`, `EMAIL_FROM=reportes@autoreportes.cl`).
-- **Endpoint de salud**: `GET /api/health` (FastAPI, puerto 8000). Útil para monitoreo externo (uptime checks, scripts, alertas independientes del log). **Siempre retorna 200**; los clientes deben inspeccionar el campo `status` para decidir si alertar. Contrato del JSON (estable, los campos extra son intencionales y se mantendrán):
-  ```json
-  {
-    "status": "ok" | "degraded",
-    "timestamp": "2026-04-29T02:10:17.851669",
-    "email": {"configured": true, "method": "Resend", "sandbox": false, "from_email": "reportes@autoreportes.cl", "detail": "API Key configurada"},
-    "admin_alerts": {"configured": false, "recipients_count": 0, "reason": "ADMIN_ALERT_EMAILS no esta definida"},
-    "scheduler": "ok" | "down",
-    "scheduler_detail": {"running": true, "state": "ok", "jobs_count": 5, "jobs": [{"id": "...", "name": "...", "next_run": "2026-04-29T23:00:00-04:00"}]}
-  }
-  ```
-  - `status`: `ok` cuando email está configurado **Y** scheduler corriendo; `degraded` si falla cualquiera. `admin_alerts` no afecta `status` (es opcional por diseño).
-  - `scheduler` es **string** (`"ok"`/`"down"`) por contrato simple para monitores; el detalle rico va en `scheduler_detail`.
-  - Privacidad: `admin_alerts` **nunca** expone las direcciones individuales — sólo `recipients_count`.
-- **`ADMIN_ALERT_EMAILS`** (opcional, recomendado en producción): lista CSV de correos de admins (ej. `gabriel@vlsur.cl,otro@vlsur.cl`) que reciben aviso cuando un envío automático se aborta por fallo de sync con Obuma. Si está vacía, el sistema sigue funcionando pero la alerta sólo queda en logs (ver sección CRITICAL más arriba). **Define esta variable en el entorno de producción** para no perder el aviso si Obuma cae fuera de horario.
-
-## Monitoreo del endpoint de salud (interno + externo)
-
-Hay **dos capas** de monitoreo del `/api/health` que se complementan:
-
-### 1. Monitor interno (automático, ya activo)
-- Job APScheduler `internal_health_check` corre **cada 5 minutos** dentro del mismo proceso FastAPI.
-- Llama directamente a `check_email_config()` + `get_scheduler_status()` (no hace HTTP, así que no depende del proxy/nginx).
-- Si detecta `degraded`, envía correo a `ADMIN_ALERT_EMAILS` con la lista de componentes en mal estado y aplica el mismo cooldown de **1 hora por scope** (`Salud del Sistema`) usado por `_send_sync_failure_alert`.
-- **Limitación**: si todo el servidor se cae (proceso muerto, kernel panic, deploy roto), este job tampoco corre — por eso es necesaria la capa externa.
-
-### 2. Monitor externo (recomendado configurar en producción)
-Configura **uno** de estos servicios apuntando a `https://<dominio>/api/health` (recordar que el servidor SIEMPRE retorna 200 — el monitor debe inspeccionar el body JSON, no sólo el status code):
-
-- **UptimeRobot** (gratis hasta 50 monitores, intervalo mínimo 5 min):
-  - Tipo: `Keyword` monitor
-  - URL: `https://<dominio>/api/health`
-  - Keyword: `"status":"ok"`
-  - Alert when: `Keyword Not Exists` → así avisa tanto si el body trae `"degraded"` como si el endpoint no responde.
-  - Notificación: correo a Gabriel (idealmente la misma lista de `ADMIN_ALERT_EMAILS`).
-- **BetterStack** o **Healthchecks.io**: equivalentes, ambos soportan asserts sobre JSON del response.
-- **Cron simple en otro Replit / GitHub Actions**: `curl -s $URL | jq -e '.status == "ok"'` y enviar correo si falla.
-
-Frecuencia recomendada: **cada 5 minutos** (alineado con el monitor interno). Destinatarios: la misma lista de `ADMIN_ALERT_EMAILS` para que Gabriel reciba todas las alertas en un solo lugar.
+- **PostgreSQL**: Primary database.
+- **Resend**: Email sending service (`RESEND_API_KEY`, `EMAIL_FROM=reportes@autoreportes.cl`).
+- **Health Endpoint**: `GET /api/health` (FastAPI, port 8000). Provides system status (ok/degraded) including email configuration and scheduler status.
+- **`ADMIN_ALERT_EMAILS`**: (Optional, recommended in production) CSV list of admin emails for sync failure alerts.
