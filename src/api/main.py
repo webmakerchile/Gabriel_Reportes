@@ -220,6 +220,45 @@ def _fix_cartera_orphans():
         logger.error(f"Error fixing cartera orphans: {e}")
 
 
+def _ensure_perf_indexes():
+    """Crea indices Postgres idempotentes para acelerar el dashboard
+    (Fase 2 de optimizacion). Cada CREATE INDEX usa Index().create(checkfirst)
+    que es no-op si ya existen.
+
+    Combos elegidos a partir de los filtros que el dashboard repite:
+      - VentaHistorico.(vendedor_id, fecha): KPIs por vendedor en rango.
+      - VentaHistorico.(cliente_id, fecha): cartera vs ventas por cliente.
+      - VentaHistorico.fecha: filtros de rango globales.
+      - VentaHistorico.(anulada, tipo_documento): filtro casi universal.
+      - VentaItem.venta_id_obuma: join contra cabecera de venta.
+      - CompraHistorico.fecha: rango global de compras.
+      - VendedorCartera.(empleado_obuma_id, activo): cartera por vendedor.
+    """
+    from sqlalchemy import Index
+    from src.models.models import VentaHistorico, VentaItem, CompraHistorico, VendedorCartera
+
+    indexes_to_create = [
+        Index("ix_ventas_vendedor_fecha", VentaHistorico.vendedor_id, VentaHistorico.fecha),
+        Index("ix_ventas_cliente_fecha", VentaHistorico.cliente_id, VentaHistorico.fecha),
+        Index("ix_ventas_fecha", VentaHistorico.fecha),
+        Index("ix_ventas_anulada_tipo", VentaHistorico.anulada, VentaHistorico.tipo_documento),
+        Index("ix_venta_items_venta_id_obuma", VentaItem.venta_id_obuma),
+        # Acelera el join VentaItem.venta_id_obuma -> VentaHistorico.obuma_id
+        # usado en Tab 1 (maquinaria) y en el chart "Top Productos" del Dashboard.
+        Index("ix_ventas_obuma_id", VentaHistorico.obuma_id),
+        Index("ix_compras_fecha", CompraHistorico.fecha),
+        Index("ix_vendedor_cartera_emp_activo", VendedorCartera.empleado_obuma_id, VendedorCartera.activo),
+    ]
+    created = 0
+    for idx in indexes_to_create:
+        try:
+            idx.create(bind=engine, checkfirst=True)
+            created += 1
+        except Exception as e:
+            logger.warning(f"perf index skip {idx.name}: {e}")
+    logger.info(f"Performance indexes ensured ({created}/{len(indexes_to_create)})")
+
+
 def _heavy_init():
     try:
         Base.metadata.create_all(bind=engine)
@@ -230,6 +269,8 @@ def _heavy_init():
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE ventas_historico ADD COLUMN vendedor_id VARCHAR(50)"))
                 conn.commit()
+        # Indices de performance (idempotente, ~1s la primera vez, no-op despues).
+        _ensure_perf_indexes()
         from src.etl.api_catalog_seed import seed_api_catalog
         from src.scheduler import start_scheduler
         db = SessionLocal()

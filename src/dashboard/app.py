@@ -1253,51 +1253,123 @@ elif page == "Vendedores":
             chart_metas = []
             chart_actuals = []
 
+            # ── Pre-fetch GROUP BY (Fase 2: antes eran 5 queries x N vendedores) ──
+            # 1) Metas del periodo, indexadas por vendedor.
+            metas_rows = db.query(VendedorMeta).filter(
+                VendedorMeta.empleado_obuma_id.in_(TRACKED_VENDEDORES),
+                VendedorMeta.anio == rend_anio,
+                VendedorMeta.mes == rend_mes,
+            ).all()
+            metas_map = {m.empleado_obuma_id: m for m in metas_rows}
+
+            # 2) Neto total por vendedor (NC resta).
+            actual_neto_rows = db.query(
+                VentaHistorico.vendedor_id,
+                func.sum(
+                    sql_case(
+                        (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                        else_=VentaHistorico.subtotal,
+                    )
+                ).label("neto"),
+            ).filter(
+                VentaHistorico.vendedor_id.in_(TRACKED_VENDEDORES),
+                extract('year', VentaHistorico.fecha) == rend_anio,
+                extract('month', VentaHistorico.fecha) == rend_mes,
+                VentaHistorico.anulada == False,
+                VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+            ).group_by(VentaHistorico.vendedor_id).all()
+            actual_neto_map = {r.vendedor_id: float(r.neto or 0) for r in actual_neto_rows}
+
+            # 3) Maquinaria por vendedor (sku LIKE 'mq-%', NC resta).
+            _sign_mq = sql_case(
+                (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -1),
+                else_=1,
+            )
+            actual_maq_rows = db.query(
+                VentaHistorico.vendedor_id,
+                func.coalesce(func.sum(_sign_mq * VentaItem.total), 0).label("maq"),
+            ).select_from(VentaItem).join(
+                VentaHistorico, VentaHistorico.obuma_id == VentaItem.venta_id_obuma,
+            ).filter(
+                VentaHistorico.vendedor_id.in_(TRACKED_VENDEDORES),
+                extract('year', VentaHistorico.fecha) == rend_anio,
+                extract('month', VentaHistorico.fecha) == rend_mes,
+                VentaHistorico.anulada == False,
+                VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+                func.lower(VentaItem.producto_sku).like('mq-%'),
+            ).group_by(VentaHistorico.vendedor_id).all()
+            actual_maq_map = {r.vendedor_id: float(r.maq or 0) for r in actual_maq_rows}
+
+            # 4) Cartera total por vendedor (excluye dummies OBU-* sin nombre).
+            cartera_rows = db.query(
+                VendedorCartera.empleado_obuma_id,
+                func.count(VendedorCartera.id).label("total"),
+            ).join(
+                ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id,
+            ).filter(
+                VendedorCartera.empleado_obuma_id.in_(TRACKED_VENDEDORES),
+                VendedorCartera.activo == True,
+                ~(
+                    ClienteFinal.rut.like('OBU-%') &
+                    (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
+                ),
+            ).group_by(VendedorCartera.empleado_obuma_id).all()
+            cartera_count_map = {r.empleado_obuma_id: int(r.total or 0) for r in cartera_rows}
+
+            # 5) Clientes atendidos por vendedor: solo cuentan los que tienen
+            #    neto > 0 en el periodo (regla original — NCs no cuentan como atencion).
+            #    Subquery: neto por (vendedor_id, cliente_id) HAVING > 0.
+            #    Outer: COUNT por vendedor_id.
+            _net_per_vc_subq = (
+                db.query(
+                    VentaHistorico.vendedor_id.label('vid'),
+                    VentaHistorico.cliente_id.label('cli_id'),
+                    func.sum(
+                        sql_case(
+                            (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                            else_=VentaHistorico.subtotal,
+                        )
+                    ).label('neto'),
+                )
+                .join(ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id)
+                .filter(
+                    VentaHistorico.vendedor_id.in_(TRACKED_VENDEDORES),
+                    extract('year', VentaHistorico.fecha) == rend_anio,
+                    extract('month', VentaHistorico.fecha) == rend_mes,
+                    VentaHistorico.anulada == False,
+                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+                    ~(
+                        ClienteFinal.rut.like('OBU-%') &
+                        (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
+                    ),
+                )
+                .group_by(VentaHistorico.vendedor_id, VentaHistorico.cliente_id)
+                .having(func.sum(
+                    sql_case(
+                        (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                        else_=VentaHistorico.subtotal,
+                    )
+                ) > 0)
+                .subquery()
+            )
+            atendidos_rows = db.query(
+                _net_per_vc_subq.c.vid,
+                func.count(_net_per_vc_subq.c.cli_id).label("n"),
+            ).group_by(_net_per_vc_subq.c.vid).all()
+            atendidos_map = {r.vid: int(r.n or 0) for r in atendidos_rows}
+
             for vid in TRACKED_VENDEDORES:
                 emp = vendedores_map.get(vid)
                 if not emp:
                     continue
 
-                meta = db.query(VendedorMeta).filter(
-                    VendedorMeta.empleado_obuma_id == vid,
-                    VendedorMeta.anio == rend_anio,
-                    VendedorMeta.mes == rend_mes
-                ).first()
-
+                meta = metas_map.get(vid)
                 meta_rep = meta.meta_repuestos if meta else 0
                 meta_maq = meta.meta_maquinaria if meta else 0
                 meta_total = meta_rep + meta_maq
 
-                actual_total_neto = db.query(func.sum(
-                    sql_case(
-                        (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
-                        else_=VentaHistorico.subtotal
-                    )
-                )).filter(
-                    VentaHistorico.vendedor_id == vid,
-                    extract('year', VentaHistorico.fecha) == rend_anio,
-                    extract('month', VentaHistorico.fecha) == rend_mes,
-                    VentaHistorico.anulada == False,
-                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
-                ).scalar() or 0
-
-                _sign_mq = sql_case(
-                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -1),
-                    else_=1
-                )
-                actual_maq = db.query(func.coalesce(func.sum(
-                    _sign_mq * VentaItem.total
-                ), 0)).select_from(VentaItem).join(
-                    VentaHistorico, VentaHistorico.obuma_id == VentaItem.venta_id_obuma
-                ).filter(
-                    VentaHistorico.vendedor_id == vid,
-                    extract('year', VentaHistorico.fecha) == rend_anio,
-                    extract('month', VentaHistorico.fecha) == rend_mes,
-                    VentaHistorico.anulada == False,
-                    VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
-                    func.lower(VentaItem.producto_sku).like('mq-%')
-                ).scalar() or 0
-
+                actual_total_neto = actual_neto_map.get(vid, 0)
+                actual_maq = actual_maq_map.get(vid, 0)
                 actual_rep_result = actual_total_neto - actual_maq
                 actual_total = actual_total_neto
 
@@ -1307,52 +1379,8 @@ elif page == "Vendedores":
                 actual_maq_for_pct = max(actual_maq, 0)
                 actual_total_for_pct = max(actual_total, 0)
 
-                total_cartera_count = db.query(func.count(VendedorCartera.id)).join(
-                    ClienteFinal, VendedorCartera.cliente_id == ClienteFinal.id
-                ).filter(
-                    VendedorCartera.empleado_obuma_id == vid,
-                    VendedorCartera.activo == True,
-                    ~(
-                        ClienteFinal.rut.like('OBU-%') &
-                        (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
-                    )
-                ).scalar() or 0
-
-                # Regla: solo cuentan clientes con neto > 0 (NCs <= facturas).
-                # Si el cliente solo tiene NCs o el neto es <= 0, NO cuenta como atendido.
-                _net_per_client_subq = (
-                    db.query(
-                        VentaHistorico.cliente_id.label('cli_id'),
-                        func.sum(
-                            sql_case(
-                                (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
-                                else_=VentaHistorico.subtotal,
-                            )
-                        ).label('neto')
-                    )
-                    .join(ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id)
-                    .filter(
-                        VentaHistorico.vendedor_id == vid,
-                        extract('year', VentaHistorico.fecha) == rend_anio,
-                        extract('month', VentaHistorico.fecha) == rend_mes,
-                        VentaHistorico.anulada == False,
-                        VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
-                        ~(
-                            ClienteFinal.rut.like('OBU-%') &
-                            (func.coalesce(func.trim(ClienteFinal.nombre), '') == '')
-                        )
-                    )
-                    .group_by(VentaHistorico.cliente_id)
-                    .having(func.sum(
-                        sql_case(
-                            (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
-                            else_=VentaHistorico.subtotal,
-                        )
-                    ) > 0)
-                    .subquery()
-                )
-                clientes_atendidos = db.query(func.count(_net_per_client_subq.c.cli_id)).scalar() or 0
-
+                total_cartera_count = cartera_count_map.get(vid, 0)
+                clientes_atendidos = atendidos_map.get(vid, 0)
                 cobertura_pct = (clientes_atendidos / total_cartera_count * 100) if total_cartera_count > 0 else 0
 
                 summary_meta_rep += meta_rep
@@ -1490,21 +1518,31 @@ elif page == "Vendedores":
 
                 if cartera_items:
                     st.markdown(f"**{len(cartera_items)} clientes activos asignados**")
-                    rows = []
-                    for vc, cli in cartera_items:
-                        ventas_12m = db.query(func.sum(
+
+                    # Fase 2: una sola query GROUP BY para los 12M de TODOS los
+                    # clientes de la cartera (antes era 1 query por cliente,
+                    # ~100+ roundtrips).
+                    cliente_ids = [cli.id for _, cli in cartera_items]
+                    ventas_12m_rows = db.query(
+                        VentaHistorico.cliente_id,
+                        func.sum(
                             sql_case(
                                 (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
-                                else_=VentaHistorico.subtotal
+                                else_=VentaHistorico.subtotal,
                             )
-                        )).filter(
-                            VentaHistorico.cliente_id == cli.id,
-                            VentaHistorico.vendedor_id == sel_cart_vid,
-                            VentaHistorico.anulada == False,
-                            func.date(VentaHistorico.fecha) >= twelve_months_ago,
-                            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
-                        ).scalar() or 0
+                        ).label("neto"),
+                    ).filter(
+                        VentaHistorico.cliente_id.in_(cliente_ids),
+                        VentaHistorico.vendedor_id == sel_cart_vid,
+                        VentaHistorico.anulada == False,
+                        func.date(VentaHistorico.fecha) >= twelve_months_ago,
+                        VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+                    ).group_by(VentaHistorico.cliente_id).all() if cliente_ids else []
+                    ventas_12m_map = {r.cliente_id: float(r.neto or 0) for r in ventas_12m_rows}
 
+                    rows = []
+                    for vc, cli in cartera_items:
+                        ventas_12m = ventas_12m_map.get(cli.id, 0)
                         rows.append({
                             "Cliente": cli.nombre,
                             "RUT": cli.rut or "—",
@@ -1575,18 +1613,24 @@ elif page == "Vendedores":
                 st.markdown("---")
                 st.markdown('<p class="section-header">Clientes por Vendedor</p>', unsafe_allow_html=True)
 
+                # Fase 2: una sola GROUP BY en vez de 1 query por vendedor.
+                cart_count_rows = db.query(
+                    VendedorCartera.empleado_obuma_id,
+                    func.count(VendedorCartera.id).label("n"),
+                ).filter(
+                    VendedorCartera.empleado_obuma_id.in_(TRACKED_VENDEDORES),
+                    VendedorCartera.activo == True,
+                ).group_by(VendedorCartera.empleado_obuma_id).all()
+                cart_count_map = {r.empleado_obuma_id: int(r.n or 0) for r in cart_count_rows}
+
                 chart_vend_names = []
                 chart_vend_counts = []
                 for vid in TRACKED_VENDEDORES:
                     emp = vendedores_map.get(vid)
                     if not emp:
                         continue
-                    count = db.query(func.count(VendedorCartera.id)).filter(
-                        VendedorCartera.empleado_obuma_id == vid,
-                        VendedorCartera.activo == True
-                    ).scalar() or 0
                     chart_vend_names.append(emp.nombre.split(" ")[0] if emp.nombre else vid)
-                    chart_vend_counts.append(count)
+                    chart_vend_counts.append(cart_count_map.get(vid, 0))
 
                 if chart_vend_names:
                     fig_cart = go.Figure(go.Bar(
@@ -1633,29 +1677,54 @@ elif page == "Vendedores":
                     compraron_rows = []
                     no_compraron_rows = []
 
-                    for vc, cli in cartera_cruce:
-                        ventas_q = db.query(
-                            func.sum(
-                                sql_case(
-                                    (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
-                                    else_=VentaHistorico.subtotal
-                                )
-                            ).label("total_ventas"),
-                            func.count(VentaHistorico.id).label("num_docs")
-                        ).filter(
-                            VentaHistorico.cliente_id == cli.id,
-                            VentaHistorico.vendedor_id == cruce_sel_vid,
-                            VentaHistorico.anulada == False,
-                            extract('year', VentaHistorico.fecha) == cruce_anio,
-                            VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G)
-                        )
-                        if cruce_mes_sel != "Todo el año":
-                            mes_idx = MONTH_LABELS.index(cruce_mes_sel) + 1
-                            ventas_q = ventas_q.filter(extract('month', VentaHistorico.fecha) == mes_idx)
+                    # Fase 2: 2 queries GROUP BY en vez de 2 queries por cliente
+                    # (~200+ roundtrips antes en una cartera de 100 clientes).
+                    cliente_ids_cruce = [cli.id for _, cli in cartera_cruce]
 
-                        result = ventas_q.first()
-                        total_ventas = result.total_ventas or 0
-                        num_docs = result.num_docs or 0
+                    # Query A: ventas del periodo seleccionado, por cliente.
+                    ventas_q_all = db.query(
+                        VentaHistorico.cliente_id,
+                        func.sum(
+                            sql_case(
+                                (VentaHistorico.tipo_documento.in_(NC_DOC_TYPES_G), -VentaHistorico.subtotal),
+                                else_=VentaHistorico.subtotal,
+                            )
+                        ).label("total_ventas"),
+                        func.count(VentaHistorico.id).label("num_docs"),
+                    ).filter(
+                        VentaHistorico.cliente_id.in_(cliente_ids_cruce),
+                        VentaHistorico.vendedor_id == cruce_sel_vid,
+                        VentaHistorico.anulada == False,
+                        extract('year', VentaHistorico.fecha) == cruce_anio,
+                        VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
+                    )
+                    if cruce_mes_sel != "Todo el año":
+                        mes_idx = MONTH_LABELS.index(cruce_mes_sel) + 1
+                        ventas_q_all = ventas_q_all.filter(extract('month', VentaHistorico.fecha) == mes_idx)
+                    ventas_periodo_rows = ventas_q_all.group_by(VentaHistorico.cliente_id).all() if cliente_ids_cruce else []
+                    ventas_periodo_map = {
+                        r.cliente_id: (float(r.total_ventas or 0), int(r.num_docs or 0))
+                        for r in ventas_periodo_rows
+                    }
+
+                    # Query B: ultima compra historica (max fecha) por cliente,
+                    # solo para los que NO compraron en el periodo. Una sola query.
+                    no_compraron_ids = [
+                        cli.id for _, cli in cartera_cruce
+                        if ventas_periodo_map.get(cli.id, (0, 0))[1] == 0
+                    ]
+                    ultima_rows = db.query(
+                        VentaHistorico.cliente_id,
+                        func.max(VentaHistorico.fecha).label("ult"),
+                    ).filter(
+                        VentaHistorico.cliente_id.in_(no_compraron_ids),
+                        VentaHistorico.vendedor_id == cruce_sel_vid,
+                        VentaHistorico.anulada == False,
+                    ).group_by(VentaHistorico.cliente_id).all() if no_compraron_ids else []
+                    ultima_compra_map = {r.cliente_id: r.ult for r in ultima_rows}
+
+                    for vc, cli in cartera_cruce:
+                        total_ventas, num_docs = ventas_periodo_map.get(cli.id, (0, 0))
 
                         if num_docs > 0:
                             compraron_rows.append({
@@ -1666,11 +1735,7 @@ elif page == "Vendedores":
                                 "Documentos": num_docs
                             })
                         else:
-                            ultima_compra = db.query(func.max(VentaHistorico.fecha)).filter(
-                                VentaHistorico.cliente_id == cli.id,
-                                VentaHistorico.vendedor_id == cruce_sel_vid,
-                                VentaHistorico.anulada == False
-                            ).scalar()
+                            ultima_compra = ultima_compra_map.get(cli.id)
                             dias_sin = (date.today() - ultima_compra.date()).days if ultima_compra else None
                             no_compraron_rows.append({
                                 "Cliente": cli.nombre,
