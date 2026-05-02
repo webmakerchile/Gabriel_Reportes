@@ -236,7 +236,10 @@ def _ensure_perf_indexes():
       - VendedorCartera.(empleado_obuma_id, activo): cartera por vendedor.
     """
     from sqlalchemy import Index
-    from src.models.models import VentaHistorico, VentaItem, CompraHistorico, VendedorCartera
+    from src.models.models import (
+        VentaHistorico, VentaItem, CompraHistorico, VendedorCartera,
+        ClienteFinal,
+    )
 
     indexes_to_create = [
         Index("ix_ventas_vendedor_fecha", VentaHistorico.vendedor_id, VentaHistorico.fecha),
@@ -249,6 +252,12 @@ def _ensure_perf_indexes():
         Index("ix_ventas_obuma_id", VentaHistorico.obuma_id),
         Index("ix_compras_fecha", CompraHistorico.fecha),
         Index("ix_vendedor_cartera_emp_activo", VendedorCartera.empleado_obuma_id, VendedorCartera.activo),
+        # Sync ETL N+1 fix (Fase 4): cada item del API hace un SELECT por obuma_id.
+        # Sin estos indices, sync_clientes (8k items) y sync_compras (~Nk items) hacen
+        # seq scan completo por lookup -> O(n^2) que tarda ~30 min con 8k clientes.
+        # Con btree: O(n log n) -> ~1-2 min para 8k items.
+        Index("ix_clientes_tenant_obuma", ClienteFinal.tenant_id, ClienteFinal.obuma_id),
+        Index("ix_compras_obuma_id", CompraHistorico.obuma_id),
     ]
     created = 0
     for idx in indexes_to_create:
