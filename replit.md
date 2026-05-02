@@ -22,6 +22,8 @@ This project is a Business Intelligence platform designed for Gabriel Hoyos (VLS
 
 **Dashboard**: Features global filters (dates, salesperson), KPIs, and charts for sales, profitability, collections, and top products.
 
+**Dashboard Cache Layer (Fase 1 perf):** El bloque `if page == "Dashboard":` consume helpers cacheados en `src/dashboard/app.py` (`_cached_load_empleados`, `_cached_dashboard_kpis`, `_cached_dashboard_charts`, `_cached_dashboard_recent_and_top`). Todos usan `@st.cache_data(ttl=300, show_spinner=False)`, abren su propia `SessionLocal()` y devuelven primitivos (no objetos ORM). El `vendor_ids` cache key viaja como tuple ordenado y `Base.metadata.create_all` se envuelve en `@st.cache_resource _ensure_schema_once()` (antes corría en cada rerun). El botón "📊 Ver Dashboard Actualizado" (post-sync manual) llama `st.cache_data.clear()` para que los datos frescos se vean inmediatamente sin esperar al TTL. Fase 2 (índices + N+1 en Vendedores/Cruce Cartera) queda pendiente.
+
 **Critical Handling of Credit/Debit Notes**:
 - **Sales/Margin/Dashboard Reports**: Credit Notes (NC) are subtracted from sales totals, and Debit Notes (ND) are added as positive charges. This logic is implemented in `excel_generator.py` and `dashboard/app.py`.
 - **Collections/Accounts Receivable Reports**: Both NC and ND are shown as positive values in the "Amount Due" column, mirroring Obuma's display. NCs are styled with italic red font, NDs with bold dark blue font, and other documents in normal black.
