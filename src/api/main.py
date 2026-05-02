@@ -21,6 +21,7 @@ from src.reports.email_service import (
     check_admin_alert_config,
 )
 from src.scheduler import get_scheduler_status
+from src.utils.date_filters import date_range_filters
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -579,11 +580,9 @@ def list_ventas(
     offset: int = 0,
     db: Session = Depends(get_db)
 ):
-    query = db.query(VentaHistorico)
-    if fecha_desde:
-        query = query.filter(func.date(VentaHistorico.fecha) >= fecha_desde)
-    if fecha_hasta:
-        query = query.filter(func.date(VentaHistorico.fecha) <= fecha_hasta)
+    query = db.query(VentaHistorico).filter(
+        *date_range_filters(VentaHistorico.fecha, fecha_desde, fecha_hasta)
+    )
     if cliente_id:
         query = query.filter(VentaHistorico.cliente_id == cliente_id)
     total = query.count()
@@ -672,11 +671,9 @@ def margen_neto(
     cliente_id: int = None,
     db: Session = Depends(get_db)
 ):
-    query = db.query(VentaHistorico)
-    if fecha_desde:
-        query = query.filter(func.date(VentaHistorico.fecha) >= fecha_desde)
-    if fecha_hasta:
-        query = query.filter(func.date(VentaHistorico.fecha) <= fecha_hasta)
+    query = db.query(VentaHistorico).filter(
+        *date_range_filters(VentaHistorico.fecha, fecha_desde, fecha_hasta)
+    )
     if cliente_id:
         query = query.filter(VentaHistorico.cliente_id == cliente_id)
 

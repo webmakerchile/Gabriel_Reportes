@@ -15,6 +15,7 @@ from src.models.models import (
     ReporteGenerado,
     VendedorCartera,
 )
+from src.utils.date_filters import date_range_filters
 
 logger = logging.getLogger(__name__)
 
@@ -261,8 +262,7 @@ def _build_cartera_sheet(wb, db, vendedor_obuma_id, empleado, date_from, date_to
                 VentaHistorico.cliente_id == cli.id,
                 VentaHistorico.vendedor_id == vendedor_obuma_id,
                 VentaHistorico.anulada == False,
-                func.date(VentaHistorico.fecha) >= date_from,
-                func.date(VentaHistorico.fecha) <= date_to,
+                *date_range_filters(VentaHistorico.fecha, date_from, date_to),
                 VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES),
             )
             .first()
@@ -447,8 +447,7 @@ def generate_vendedor_report(
         .filter(
             VentaHistorico.vendedor_id == vendedor_obuma_id,
             VentaHistorico.anulada != True,
-            func.date(VentaHistorico.fecha) >= date_from,
-            func.date(VentaHistorico.fecha) <= date_to,
+            *date_range_filters(VentaHistorico.fecha, date_from, date_to),
             VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES),
         )
         .all()
@@ -842,8 +841,7 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
         .filter(
             VentaHistorico.vendedor_id != None,
             VentaHistorico.anulada != True,
-            func.date(VentaHistorico.fecha) >= date_from,
-            func.date(VentaHistorico.fecha) <= date_to,
+            *date_range_filters(VentaHistorico.fecha, date_from, date_to),
         )
         .all()
     )
@@ -872,8 +870,7 @@ def generate_daily_report(db: Session, report_date: date = None) -> str:
             .filter(
                 VentaHistorico.vendedor_id == vid,
                 VentaHistorico.anulada != True,
-                func.date(VentaHistorico.fecha) >= date_from,
-                func.date(VentaHistorico.fecha) <= date_to,
+                *date_range_filters(VentaHistorico.fecha, date_from, date_to),
                 VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES),
             )
             .first()

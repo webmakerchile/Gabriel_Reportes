@@ -36,6 +36,7 @@ from src.etl.obuma_client import ObumaClient
 from src.reports.excel_generator import generate_vendedor_report, generate_all_vendedor_reports
 from src.reports.email_service import send_report_email, build_report_email_html, check_email_config, test_email_delivery, check_admin_alert_config
 from src.models.models import ReporteProgramado
+from src.utils.date_filters import date_range_filters, year_month_range
 
 @st.cache_resource
 def _ensure_schema_once():
@@ -370,10 +371,7 @@ def _apply_dash_filters_q(query, date_from, date_to, vendor_ids, model=None):
     """Helper interno: aplica filtros de fecha + vendor_ids a una query."""
     if model is None:
         model = VentaHistorico
-    if date_from:
-        query = query.filter(func.date(model.fecha) >= date_from)
-    if date_to:
-        query = query.filter(func.date(model.fecha) <= date_to)
+    query = query.filter(*date_range_filters(model.fecha, date_from, date_to))
     if vendor_ids and model is VentaHistorico:
         query = query.filter(model.vendedor_id.in_(list(vendor_ids)))
     return query
@@ -411,11 +409,9 @@ def _cached_dashboard_kpis(date_from, date_to, vendor_ids):
         total_pagado = base_q.with_entities(func.sum(VentaHistorico.total_pagado)).scalar() or 0
         total_por_pagar = base_q.with_entities(func.sum(VentaHistorico.total_por_pagar)).scalar() or 0
 
-        compras_q = db.query(func.sum(CompraHistorico.total))
-        if date_from:
-            compras_q = compras_q.filter(func.date(CompraHistorico.fecha) >= date_from)
-        if date_to:
-            compras_q = compras_q.filter(func.date(CompraHistorico.fecha) <= date_to)
+        compras_q = db.query(func.sum(CompraHistorico.total)).filter(
+            *date_range_filters(CompraHistorico.fecha, date_from, date_to)
+        )
         total_compras = compras_q.scalar() or 0
 
         n_clientes = db.query(ClienteFinal).filter(ClienteFinal.activo == True).count()
@@ -507,11 +503,10 @@ def _cached_dashboard_charts(date_from, date_to, vendor_ids):
             extract('year', CompraHistorico.fecha).label("anio"),
             extract('month', CompraHistorico.fecha).label("mes"),
             func.sum(CompraHistorico.total).label("total"),
-        ).filter(CompraHistorico.fecha.isnot(None))
-        if date_from:
-            compras_q_monthly = compras_q_monthly.filter(func.date(CompraHistorico.fecha) >= date_from)
-        if date_to:
-            compras_q_monthly = compras_q_monthly.filter(func.date(CompraHistorico.fecha) <= date_to)
+        ).filter(
+            CompraHistorico.fecha.isnot(None),
+            *date_range_filters(CompraHistorico.fecha, date_from, date_to),
+        )
         monthly_compras = compras_q_monthly.group_by("anio", "mes").order_by("anio", "mes").all()
 
         # 6. Top 15 productos vendidos
@@ -1262,6 +1257,11 @@ elif page == "Vendedores":
             ).all()
             metas_map = {m.empleado_obuma_id: m for m in metas_rows}
 
+            # Rango de fecha equivalente a (year=rend_anio, month=rend_mes). Fase 3:
+            # se usa col >= start AND col < end_excl en vez de extract('year/month',
+            # col) == ... para que el planner aproveche ix_ventas_vendedor_fecha.
+            _period_start, _period_end = year_month_range(rend_anio, rend_mes)
+
             # 2) Neto total por vendedor (NC resta).
             actual_neto_rows = db.query(
                 VentaHistorico.vendedor_id,
@@ -1273,8 +1273,8 @@ elif page == "Vendedores":
                 ).label("neto"),
             ).filter(
                 VentaHistorico.vendedor_id.in_(TRACKED_VENDEDORES),
-                extract('year', VentaHistorico.fecha) == rend_anio,
-                extract('month', VentaHistorico.fecha) == rend_mes,
+                VentaHistorico.fecha >= _period_start,
+                VentaHistorico.fecha < _period_end,
                 VentaHistorico.anulada == False,
                 VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
             ).group_by(VentaHistorico.vendedor_id).all()
@@ -1292,8 +1292,8 @@ elif page == "Vendedores":
                 VentaHistorico, VentaHistorico.obuma_id == VentaItem.venta_id_obuma,
             ).filter(
                 VentaHistorico.vendedor_id.in_(TRACKED_VENDEDORES),
-                extract('year', VentaHistorico.fecha) == rend_anio,
-                extract('month', VentaHistorico.fecha) == rend_mes,
+                VentaHistorico.fecha >= _period_start,
+                VentaHistorico.fecha < _period_end,
                 VentaHistorico.anulada == False,
                 VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
                 func.lower(VentaItem.producto_sku).like('mq-%'),
@@ -1334,8 +1334,8 @@ elif page == "Vendedores":
                 .join(ClienteFinal, VentaHistorico.cliente_id == ClienteFinal.id)
                 .filter(
                     VentaHistorico.vendedor_id.in_(TRACKED_VENDEDORES),
-                    extract('year', VentaHistorico.fecha) == rend_anio,
-                    extract('month', VentaHistorico.fecha) == rend_mes,
+                    VentaHistorico.fecha >= _period_start,
+                    VentaHistorico.fecha < _period_end,
                     VentaHistorico.anulada == False,
                     VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
                     ~(
@@ -1535,7 +1535,7 @@ elif page == "Vendedores":
                         VentaHistorico.cliente_id.in_(cliente_ids),
                         VentaHistorico.vendedor_id == sel_cart_vid,
                         VentaHistorico.anulada == False,
-                        func.date(VentaHistorico.fecha) >= twelve_months_ago,
+                        *date_range_filters(VentaHistorico.fecha, twelve_months_ago, None),
                         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
                     ).group_by(VentaHistorico.cliente_id).all() if cliente_ids else []
                     ventas_12m_map = {r.cliente_id: float(r.neto or 0) for r in ventas_12m_rows}
@@ -1682,6 +1682,10 @@ elif page == "Vendedores":
                     cliente_ids_cruce = [cli.id for _, cli in cartera_cruce]
 
                     # Query A: ventas del periodo seleccionado, por cliente.
+                    # Fase 3: rango de fecha (col >= start AND col < end_excl) en
+                    # vez de extract('year/month', col) para usar ix_ventas_*_fecha.
+                    _cruce_mes = (MONTH_LABELS.index(cruce_mes_sel) + 1) if cruce_mes_sel != "Todo el año" else None
+                    _cruce_start, _cruce_end = year_month_range(cruce_anio, _cruce_mes)
                     ventas_q_all = db.query(
                         VentaHistorico.cliente_id,
                         func.sum(
@@ -1695,12 +1699,10 @@ elif page == "Vendedores":
                         VentaHistorico.cliente_id.in_(cliente_ids_cruce),
                         VentaHistorico.vendedor_id == cruce_sel_vid,
                         VentaHistorico.anulada == False,
-                        extract('year', VentaHistorico.fecha) == cruce_anio,
+                        VentaHistorico.fecha >= _cruce_start,
+                        VentaHistorico.fecha < _cruce_end,
                         VentaHistorico.tipo_documento.in_(VALID_DOC_TYPES_G),
                     )
-                    if cruce_mes_sel != "Todo el año":
-                        mes_idx = MONTH_LABELS.index(cruce_mes_sel) + 1
-                        ventas_q_all = ventas_q_all.filter(extract('month', VentaHistorico.fecha) == mes_idx)
                     ventas_periodo_rows = ventas_q_all.group_by(VentaHistorico.cliente_id).all() if cliente_ids_cruce else []
                     ventas_periodo_map = {
                         r.cliente_id: (float(r.total_ventas or 0), int(r.num_docs or 0))
@@ -2029,11 +2031,9 @@ elif page == "Ventas":
                 vend_options_v = ["Todos"] + [e.nombre for e in empleados_v]
                 filtro_vendedor = st.selectbox("Vendedor", vend_options_v, key="vd_vend")
 
-            query = db.query(VentaHistorico)
-            if fecha_desde:
-                query = query.filter(func.date(VentaHistorico.fecha) >= fecha_desde)
-            if fecha_hasta:
-                query = query.filter(func.date(VentaHistorico.fecha) <= fecha_hasta)
+            query = db.query(VentaHistorico).filter(
+                *date_range_filters(VentaHistorico.fecha, fecha_desde, fecha_hasta)
+            )
             if filtro_estado == "Vigentes":
                 query = query.filter(VentaHistorico.anulada == False)
             elif filtro_estado == "Anuladas":
