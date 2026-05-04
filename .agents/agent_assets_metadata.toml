@@ -36,3 +36,9 @@ id = "wiJvNC7nMRktr_7GG3utw"
 uri = "file://reportes_cliente/Reporte_Mejoras_BI_VLSur.docx"
 type = "word_document"
 title = "Reporte de Estado y Mejoras - Plataforma BI VLSur"
+
+[[outputs]]
+id = "3-jQQpvSXwLYymN2VXQme"
+uri = "file://reportes_cliente/Reporte_Mejoras_BI_VLSur.pdf"
+type = "pdf"
+title = "Reporte de Estado y Mejoras - Plataforma BI VLSur (PDF)"
