@@ -33,7 +33,12 @@ from src.models.models import (
 )
 from src.etl.sync_service import SyncService
 from src.etl.obuma_client import ObumaClient
-from src.reports.excel_generator import generate_vendedor_report, generate_all_vendedor_reports
+from src.reports.excel_generator import (
+    generate_vendedor_report,
+    generate_all_vendedor_reports,
+    generate_cartera_cobranza_report,
+    generate_all_cartera_cobranza_reports,
+)
 from src.reports.email_service import send_report_email, build_report_email_html, check_email_config, test_email_delivery, check_admin_alert_config
 from src.models.models import ReporteProgramado
 from src.utils.date_filters import date_range_filters, year_month_range
@@ -2917,6 +2922,96 @@ elif page == "Reportes":
                                 st.success(f"Se generaron {len(fps)} reportes exitosamente")
                             else:
                                 st.warning("No se encontraron ventas en el periodo seleccionado.")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+
+            # ── Cartera por Cobrar (nuevo modulo) ─────────────────────────
+            st.markdown("---")
+            st.markdown('<p class="section-header">📥 Cartera por Cobrar (Cobranza)</p>', unsafe_allow_html=True)
+            st.caption(
+                "Genera el Excel de cartera por cobrar (vencidas + por vencer) con "
+                "semaforo por dias. Envio automatico todos los lunes 09:00 (Chile)."
+            )
+
+            col_cob_ind, col_cob_all = st.columns(2, gap="large")
+
+            with col_cob_ind:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-icon">📥</div>
+                    <p class="metric-label">CARTERA - INDIVIDUAL</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">Cartera por cobrar de un vendedor</p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("")
+
+                cob_vendedor_sel = st.selectbox("Vendedor", vendedor_display_list, key="cob_ind_vendedor")
+                cob_ind_fecha = st.date_input(
+                    "Fecha del reporte",
+                    value=date.today(),
+                    key="cob_ind_fecha",
+                    help="Fecha de corte para calcular dias vencidos. Por defecto, hoy.",
+                )
+
+                if st.button("Generar Cartera Individual", type="primary", use_container_width=True, key="cob_gen_ind"):
+                    vid = vendedor_map[cob_vendedor_sel]
+                    with st.spinner(f"Generando cartera por cobrar de {cob_vendedor_sel}..."):
+                        try:
+                            fp = generate_cartera_cobranza_report(db, vid, cob_ind_fecha)
+                            if fp:
+                                st.session_state["rpt_last_files"] = [fp]
+                                st.session_state["rpt_last_type"] = "cartera_cobranza"
+                                st.session_state["rpt_last_date_from"] = cob_ind_fecha
+                                st.session_state["rpt_last_date_to"] = cob_ind_fecha
+                                st.success(f"Cartera generada: {os.path.basename(fp)}")
+                            else:
+                                st.warning("Este vendedor no tiene documentos pendientes a la fecha seleccionada.")
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+
+            with col_cob_all:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-icon">📥</div>
+                    <p class="metric-label">CARTERA - TODOS LOS VENDEDORES</p>
+                    <p style="color:{TEXT_SECONDARY};font-size:0.85rem;margin:0;">Una cartera por cada uno de los 5 vendedores</p>
+                </div>
+                """, unsafe_allow_html=True)
+                st.markdown("")
+
+                cob_all_fecha = st.date_input(
+                    "Fecha del reporte",
+                    value=date.today(),
+                    key="cob_all_fecha",
+                    help="Fecha de corte para calcular dias vencidos. Por defecto, hoy.",
+                )
+                cob_all_sync = st.checkbox(
+                    "Sincronizar con Obuma antes de generar (recomendado)",
+                    value=True, key="cob_all_sync",
+                    help="Sync inmediato de ventas + cobros para incluir documentos del dia de hoy. Si falla, no se generan reportes.",
+                )
+
+                if st.button("Generar Cartera de Todos", type="primary", use_container_width=True, key="cob_gen_all"):
+                    with st.spinner("Generando cartera por cobrar de los 5 vendedores..."):
+                        try:
+                            results = generate_all_cartera_cobranza_reports(
+                                db, report_date=cob_all_fecha, do_sync=cob_all_sync
+                            )
+                            fps = [fp for _, fp in results if fp]
+                            if fps:
+                                st.session_state["rpt_last_files"] = fps
+                                st.session_state["rpt_last_type"] = "cartera_cobranza_todos"
+                                st.session_state["rpt_last_date_from"] = cob_all_fecha
+                                st.session_state["rpt_last_date_to"] = cob_all_fecha
+                                vendedores_omitidos = sum(1 for _, fp in results if not fp)
+                                msg = f"Se generaron {len(fps)} carteras"
+                                if vendedores_omitidos:
+                                    msg += f" ({vendedores_omitidos} vendedor(es) sin saldo pendiente)"
+                                st.success(msg)
+                            elif not results:
+                                st.error("Sync con Obuma fallo. No se generaron reportes para evitar datos viejos.")
+                            else:
+                                st.warning("Ningun vendedor tiene documentos pendientes a la fecha seleccionada.")
                         except Exception as e:
                             st.error(f"Error: {str(e)}")
 
