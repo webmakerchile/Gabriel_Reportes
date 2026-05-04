@@ -30,3 +30,9 @@ id = "UCWTRZDBG4k6w5CQ4cAhW"
 uri = "file://reports/cartera_cobranza_Jesus_Ernesto_Gonzalez_Gimenez_20260427.xlsx"
 type = "table"
 title = "Cartera Jesus - 27/04/2026"
+
+[[outputs]]
+id = "wiJvNC7nMRktr_7GG3utw"
+uri = "file://reportes_cliente/Reporte_Mejoras_BI_VLSur.docx"
+type = "word_document"
+title = "Reporte de Mejoras - Plataforma BI VLSur"
