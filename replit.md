@@ -16,7 +16,14 @@ This project is a Business Intelligence platform for Gabriel Hoyos (VLSur), desi
 - **Frontend**: Streamlit (port 5000)
 - **Database**: PostgreSQL (single source of truth, multi-tenant)
 - **ETL**: Python module consuming Obuma API (21 endpoints for synchronization)
-- **Scheduler**: APScheduler for daily light syncs and automated report deliveries. Ensures immediate synchronization before report generation and aborts if sync fails. An internal health check runs every 5 minutes.
+- **Scheduler**: APScheduler for daily light syncs and automated report deliveries. Ensures immediate synchronization before report generation and aborts if sync fails. An internal health check runs every 5 minutes. Jobs configurados (todos zona horaria America/Santiago, todos con sync inmediato + abort-on-failure):
+- `daily_sync` — diario 18:30 (sync ligero, sin envío de reportes).
+- `daily_weekday_reports` — Lun-Jue 23:00 (reporte diario por vendedor, omite viernes).
+- `weekly_friday_reports` — Vie 23:00 (reporte semanal por vendedor).
+- `weekend_morning_reports` — Sab/Dom 09:00 (reporte fin de semana por vendedor).
+- `weekly_monday_cobranza_reports` — **Lun 09:00 (Cartera por Cobrar por Vendedor)**: cumple la spec del módulo "Reporte semanal de cobranza por vendedor". Llama `generate_all_cartera_cobranza_reports(do_sync=True)` y envía cada Excel personalizado a los emails configurados en `ReporteProgramado.emails_destino`. Si un vendedor no tiene saldo pendiente, se omite (no se envía correo vacío).
+- `check_scheduled_reports` — cada 15 min (verificación de reportes programados ad-hoc).
+- `internal_health_check` — cada 5 min (monitor de salud interno).
 
 **Reports**: Generated via `src/reports/excel_generator.py` (using openpyxl) and sent via email using `src/reports/email_service.py`. Excel reports use specific styling (yellow for zero cells, green for ABC segments, blue/white headers).
 

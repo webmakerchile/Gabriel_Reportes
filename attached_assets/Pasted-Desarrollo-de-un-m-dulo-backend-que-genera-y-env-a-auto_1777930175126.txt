@@ -1,0 +1,30 @@
+Desarrollo de un módulo backend que genera y envía automáticamente cada lunes un reporte Excel personalizado a cada vendedor con el estado de cobranza de su cartera de clientes, incluyendo días de atraso y semáforo visual de prioridades.
+
+QUÉ INCLUYE:
+
+•	Reporte unificado que combina facturas vencidas y no vencidas en un solo Excel por vendedor.
+•	Agrupación jerárquica de la información: primero por vendedor, dentro de cada vendedor agrupado por cliente, mostrando todas sus facturas pendientes.
+•	Cálculo automático de días de atraso (fecha del reporte menos fecha de emisión de cada factura).
+•	Semáforo visual de colores aplicado a cada factura según su antigüedad: verde para 30 a 45 días, naranja para 46 a 60 días, rojo para 61 días o más.
+•	Estructura del Excel con todas las columnas operativas: documento, folio, fecha emisión, fecha vencimiento, fecha del reporte, días de atraso, cliente, RUT, vendedor y monto por pagar.
+•	Filtrado inteligente que excluye documentos anulados, pre-facturas y resta automáticamente las notas de crédito para mostrar el saldo real adeudado.
+•	Programación automática del envío cada lunes a las 09:00 hrs vía cron job.
+•	Envío personalizado por correo a cada uno de los 5 vendedores, recibiendo solo el reporte de sus propios clientes.
+•	Integración con la API de OBUMA mediante el sistema actual de sincronización del cliente, sin afectar los reportes existentes.
+•	Pruebas funcionales completas y documentación técnica del módulo.
+
+PROCESO DE TRABAJO:
+
+1.	Validación de requerimientos sobre el formato del Excel de referencia y los rangos del semáforo (verde/naranja/rojo) ya definidos por el cliente.
+2.	Análisis del modelo de datos existente para confirmar disponibilidad del campo fecha de vencimiento en el sistema.
+3.	Desarrollo de la función de generación del Excel con agrupación por vendedor y cliente.
+4.	Implementación del cálculo de días de atraso y la aplicación de colores condicionales.
+5.	Configuración del cron job semanal en el scheduler existente del proyecto.
+6.	Configuración del envío personalizado por vendedor con su Excel adjunto.
+7.	Pruebas internas con datos reales del cliente.
+8.	Despliegue en producción y validación de aceptación por parte del cliente.
+
+TIEMPO DE ENTREGA: 5 días hábiles
+
+GARANTÍA: 30 días hábiles post-implementación para corrección de errores críticos de funcionamiento.
+Ideal para: Empresas con equipos de venta que requieren visibilidad semanal automatizada del estado de cobranza de su cartera, priorizando visualmente los clientes con mayor antigüedad de deuda para mejorar la gestión de cobranza y el flujo de caja.

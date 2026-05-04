@@ -11,6 +11,7 @@ from src.reports.excel_generator import (
     generate_vendedor_report,
     sync_for_report,
     log_reconciliation_per_vendor,
+    generate_all_cartera_cobranza_reports,
 )
 from src.reports.email_service import (
     send_report_email,
@@ -187,6 +188,121 @@ def weekend_morning_reports():
         )
     except Exception as e:
         logger.error(f"Error en envio de fin de semana: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+def weekly_monday_cobranza_reports():
+    """Reporte semanal de Cartera/Cobranza por vendedor, todos los lunes 09:00 Chile.
+
+    Cumple la spec del modulo "Reporte semanal de cobranza por vendedor":
+    - Genera UN Excel por cada uno de los 5 vendedores trackeados con sus
+      facturas pendientes (vencidas + por vencer + sin vencimiento).
+    - Sync inmediato + abort-on-failure: ANTES de generar cualquier Excel,
+      `generate_all_cartera_cobranza_reports(do_sync=True)` ejecuta el sync
+      con Obuma. Si falla, retorna [] y NO se envia ningun correo.
+    - Envio personalizado: cada vendedor recibe SOLO su propio Excel a los
+      emails configurados en ReporteProgramado.emails_destino. Si un
+      vendedor no tiene saldo pendiente, se omite (no se envia correo vacio).
+    """
+    from src.models.models import ReporteProgramado, Empleado
+
+    today = date.today()
+    logger.info(f"Ejecutando envio semanal de cobranza por vendedor (lunes {today} 09:00)...")
+
+    email_config = check_email_config()
+    db = SessionLocal()
+    try:
+        # generate_all_* ya hace sync inmediato + abort si falla (retorna []).
+        results = generate_all_cartera_cobranza_reports(db, report_date=today, do_sync=True)
+        if not results:
+            logger.error(
+                "Reporte Cobranza Lunes 09:00: sync inmediato fallo o no se generaron Excels. "
+                "No se envia ningun correo."
+            )
+            _send_sync_failure_alert(
+                "Reporte Cobranza Lunes 09:00",
+                Exception("generate_all_cartera_cobranza_reports retorno lista vacia"),
+            )
+            return
+
+        # Pre-fetch emails configurados por vendedor (1 query, no N).
+        schedules = (
+            db.query(ReporteProgramado)
+            .filter(ReporteProgramado.activo == True)
+            .all()
+        )
+        sched_by_vendedor = {
+            str(s.vendedor_obuma_id): s for s in schedules if s.vendedor_obuma_id
+        }
+
+        enviados = 0
+        for vid, fp in results:
+            if not fp:
+                # Vendedor sin documentos pendientes -> nada que enviar.
+                continue
+            try:
+                if not email_config["configured"]:
+                    logger.warning(
+                        f"Cobranza vendedor {vid}: email no configurado, Excel generado pero NO enviado ({fp})"
+                    )
+                    continue
+
+                sched = sched_by_vendedor.get(str(vid))
+                if not sched or not sched.emails_destino:
+                    logger.warning(
+                        f"Cobranza vendedor {vid}: sin emails configurados en ReporteProgramado, Excel NO enviado"
+                    )
+                    continue
+
+                emails = [
+                    e.strip()
+                    for e in sched.emails_destino.replace("\n", ",").split(",")
+                    if e.strip() and "@" in e.strip()
+                ]
+                if not emails:
+                    continue
+
+                emp = db.query(Empleado).filter(Empleado.obuma_id == str(vid)).first()
+                vname = emp.nombre if emp else f"Vendedor {vid}"
+                fecha_str = today.strftime("%d/%m/%Y")
+
+                subject = f"Reporte Cartera por Cobrar - {vname} - {fecha_str}"
+                body = build_report_email_html(
+                    vname,
+                    "Reporte Semanal de Cobranza",
+                    fecha_str,
+                    {
+                        "Vendedor": vname,
+                        "Fecha del reporte": fecha_str,
+                        "Generado": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                        "Contenido": (
+                            "Cartera por cobrar (vencidos + por vencer) con semaforo por dias de "
+                            "emision (verde 30-45, naranja 46-60, rojo 61+)."
+                        ),
+                    },
+                )
+
+                result = send_report_email(emails, subject, body, [fp])
+                if result["success"]:
+                    enviados += 1
+                    logger.info(f"Reporte Cobranza {vname} enviado a: {emails}")
+                else:
+                    logger.error(
+                        f"Error enviando Reporte Cobranza {vname}: {result.get('error')}"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Error enviando reporte cobranza vendedor {vid}: {e}",
+                    exc_info=True,
+                )
+
+        logger.info(
+            f"Reporte Cobranza Lunes 09:00: {enviados} correos enviados de {sum(1 for _, fp in results if fp)} Excels generados"
+        )
+    except Exception as e:
+        logger.error(f"Error fatal en envio semanal de cobranza: {e}", exc_info=True)
+        _send_sync_failure_alert("Reporte Cobranza Lunes 09:00", e)
     finally:
         db.close()
 
@@ -714,6 +830,13 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.add_job(
+        weekly_monday_cobranza_reports,
+        CronTrigger(day_of_week="mon", hour=9, minute=0, timezone="America/Santiago"),
+        id="weekly_monday_cobranza_reports",
+        name="Envio Semanal Cartera Cobranza por Vendedor - Lunes 09:00 Chile",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         process_scheduled_reports,
         IntervalTrigger(minutes=15, timezone="America/Santiago"),
         id="check_scheduled_reports",
@@ -732,7 +855,8 @@ def start_scheduler():
     logger.info(
         "Scheduler iniciado - Sync ligero diario 18:30 + "
         "Reportes Lun-Jue 23:00 + Reporte Semanal viernes 23:00 + "
-        "Reportes Sab-Dom 09:00 + Verificacion programados cada 15 min + "
+        "Reportes Sab-Dom 09:00 + Cartera Cobranza por Vendedor lunes 09:00 + "
+        "Verificacion programados cada 15 min + "
         "Monitor interno de salud cada 5 min "
         "(todos con sync inmediato + abort-on-failure)"
     )
