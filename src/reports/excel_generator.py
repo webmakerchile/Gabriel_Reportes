@@ -979,7 +979,10 @@ def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
     """Consulta y arma lista de dicts con datos por documento pendiente.
     Filtros: vendedor_id == vendedor_obuma_id, total_por_pagar > 0,
              tipo_documento in VALID_DOC_TYPES, no anuladas.
-    NCs: POR PAGAR positivo (igual que Obuma — NC pendiente es saldo a favor del cliente).
+    NCs: POR PAGAR NEGATIVO (saldo a favor del cliente, RESTA del total a cobrar).
+         Esto reproduce el "Total ventas a cobrar" tal como lo muestra Obuma:
+         las NC reducen lo adeudado por el cliente. Visualmente la celda lleva
+         cursiva roja (NC_FONT) ademas del signo negativo para que sea evidente.
     Orden: cliente asc, dias_atraso desc."""
     ventas = (
         db.query(VentaHistorico, ClienteFinal, Empleado)
@@ -1004,9 +1007,15 @@ def _build_cobranza_rows(db, vendedor_obuma_id, report_date):
         es_nc = venta.tipo_documento in NC_DOC_TYPES
         es_nd = venta.tipo_documento in ND_DOC_TYPES
         por_pagar_real = float(venta.total_por_pagar or 0)
-        # NC: se mantiene POSITIVO (igual que Obuma "Facturas por Cobrar").
+        # NC: se invierte a NEGATIVO. Una NC pendiente es saldo a favor del
+        #     cliente, asi que RESTA del Total a Cobrar (igual que Obuma).
+        #     De este modo el subtotal por cliente, el TOTAL GENERAL y los
+        #     totales del bloque RESUMEN CARTERA se calculan correctamente
+        #     con una suma directa de la columna POR PAGAR.
         # ND: se mantiene POSITIVO (cargo adicional al cliente, igual que Factura).
         # Distincion visual: NC -> font italic rojo, ND -> font azul oscuro bold.
+        if es_nc:
+            por_pagar_real = -abs(por_pagar_real)
 
         estado = _estado_documento(fecha_vto, report_date)
         # Dias hasta/desde vencimiento (positivo = vencido, negativo = por vencer)
@@ -1325,9 +1334,11 @@ def generate_cartera_cobranza_report(db: Session, vendedor_obuma_id, report_date
       FECHA HOY, DÍAS ATRASO, CLIENTE, CLIENTE RUT, VENDEDOR, POR PAGAR.
     - Agrupado por cliente con subtotal en gris + TOTAL GENERAL al final.
     - Semaforo por dias desde emision: 30-45 verde, 46-60 naranja, 61+ rojo.
-    - NCs: POR PAGAR positivo (igual que Obuma), font italic rojo como indicador.
+    - NCs: POR PAGAR NEGATIVO (igual que Obuma — saldo a favor del cliente),
+      font italic rojo como indicador visual adicional.
     - Sin vencimiento: texto en gris cursiva.
-    - Total = suma directa de POR PAGAR (sin restar adicional las NCs).
+    - Total = suma directa de POR PAGAR (las NC restan automaticamente por su
+      signo negativo, replicando el "Total ventas a cobrar" que muestra Obuma).
     """
     if report_date is None:
         report_date = date.today()

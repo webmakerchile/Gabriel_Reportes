@@ -48,7 +48,7 @@ This project is a Business Intelligence platform for Gabriel Hoyos (VLSur), desi
 
 **Critical Handling of Credit/Debit Notes**:
 - **Sales/Margin/Dashboard Reports**: Credit Notes (NC) are subtracted from sales, Debit Notes (ND) are added.
-- **Collections/Accounts Receivable Reports**: Both NC and ND are shown as positive values, with specific styling (italic red for NC, bold dark blue for ND).
+- **Collections/Accounts Receivable Reports**: NCs are shown as **NEGATIVE** values in the POR PAGAR column (italic red font) so they subtract from the customer's outstanding balance — matching how Obuma's "Facturas por Cobrar" computes "Total ventas a cobrar". NDs remain positive (bold dark blue font). All downstream sums (per-client subtotal, TOTAL GENERAL, RESUMEN CARTERA totals, distribution by due-date ranges) are direct sums of POR PAGAR and therefore self-adjust correctly via the NC sign. Historical note: prior to commit fixing this, NCs were shown positive and inflated the total by 2× the NC amount per occurrence (e.g. an NC of $273.688 made the total differ by +$547.376 vs. Obuma).
 
 **Critical Immediate Sync + Abort-on-Failure**:
 - All automatic report dispatches perform an immediate, blocking sync. If any part of the sync fails, report dispatch is aborted, an error is logged, and an administrative alert is sent (with anti-spam cooldowns).
