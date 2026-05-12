@@ -42,3 +42,15 @@ id = "3-jQQpvSXwLYymN2VXQme"
 uri = "file://reportes_cliente/Reporte_Mejoras_BI_VLSur.pdf"
 type = "pdf"
 title = "Reporte de Estado y Mejoras - Plataforma BI VLSur (PDF)"
+
+[[outputs]]
+id = "o3q7hRGAxPzZw_obyi1SO"
+uri = "file://Justificacion_Costos_autoreportes.pdf"
+type = "pdf"
+title = "Justificación de Costos - autoreportes.cl (PDF)"
+
+[[outputs]]
+id = "ij9tmft0kg71vCOGA68Ms"
+uri = "file://Justificacion_Costos_autoreportes.docx"
+type = "word_document"
+title = "Justificación de Costos - autoreportes.cl (Word editable)"
