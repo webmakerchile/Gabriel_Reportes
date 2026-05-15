@@ -21,7 +21,7 @@ This project is a Business Intelligence platform for Gabriel Hoyos (VLSur), desi
 - `daily_weekday_reports` — Lun-Jue 23:00 (reporte diario por vendedor, omite viernes).
 - `weekly_friday_reports` — Vie 23:00 (reporte semanal por vendedor).
 - `weekend_morning_reports` — Sab/Dom 09:00 (reporte fin de semana por vendedor).
-- `weekly_monday_cobranza_reports` — **Lun 09:00 (Cartera por Cobrar por Vendedor)**: cumple la spec del módulo "Reporte semanal de cobranza por vendedor". Llama `generate_all_cartera_cobranza_reports(do_sync=True)` y envía cada Excel personalizado a los emails configurados en `ReporteProgramado.emails_destino`. Si un vendedor no tiene saldo pendiente, se omite (no se envía correo vacío).
+- `weekly_monday_cobranza_reports` — **Lun 06:30 (Cartera por Cobrar por Vendedor, entrega ~09:00)**: cumple la spec del módulo "Reporte semanal de cobranza por vendedor". Llama `generate_all_cartera_cobranza_reports(do_sync=True)` y envía cada Excel personalizado a los emails configurados en `ReporteProgramado.emails_destino`. Si un vendedor no tiene saldo pendiente, se omite (no se envía correo vacío). El cron se gatilla a las 06:30 (no 09:00) porque el sync inmediato con Obuma + la generación de los 5 Excels (~1.500 docs en total) tarda ~2.5h en producción; de este modo el correo LLEGA cerca de las 09:00 como pidió el cliente.
 - `check_scheduled_reports` — cada 15 min (verificación de reportes programados ad-hoc).
 - `internal_health_check` — cada 5 min (monitor de salud interno).
 
