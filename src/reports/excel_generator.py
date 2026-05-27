@@ -967,10 +967,17 @@ def _semaforo_cobranza_fill(dias_atraso):
 
 def _estado_documento(fecha_vto, report_date):
     """Estado del documento segun fecha de vencimiento vs fecha del reporte.
-    Retorna 'Vencido', 'Por vencer' o 'Sin vencimiento'."""
+    Retorna 'Vencido', 'Por vencer' o 'Sin vencimiento'.
+
+    Importante: 'fecha_vto == report_date' (vence HOY) cuenta como VENCIDO,
+    igual que Obuma. Antes usabamos '<' (estricto), pero eso clasificaba los
+    documentos que vencen hoy como 'Por vencer' y los subtotales del bloque
+    RESUMEN CARTERA no cuadraban contra Obuma. Tambien era inconsistente con
+    el rango 'Vence hoy' de la DISTRIBUCION (dias_vto == 0), que ya estaba
+    agrupado del lado de los vencidos."""
     if fecha_vto is None:
         return "Sin vencimiento"
-    if fecha_vto < report_date:
+    if fecha_vto <= report_date:
         return "Vencido"
     return "Por vencer"
 
