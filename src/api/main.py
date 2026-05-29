@@ -130,10 +130,12 @@ def _seed_reportes_programados(db):
     GABRIEL_EMAIL = "gabrielhoyos@vlsur.cl"
 
     now = datetime.now()
-    days_until_friday = (4 - now.weekday()) % 7
-    if days_until_friday == 0 and now.hour >= 18:
-        days_until_friday = 7
-    next_friday = (now + timedelta(days=max(days_until_friday, 1))).replace(hour=18, minute=30, second=0, microsecond=0)
+    # El reporte semanal ahora sale los SABADOS 06:30 (misma hora que cartera),
+    # antes viernes 23:00. weekday(): lunes=0 ... sabado=5.
+    days_until_saturday = (5 - now.weekday()) % 7
+    next_saturday = (now + timedelta(days=days_until_saturday)).replace(hour=6, minute=30, second=0, microsecond=0)
+    if next_saturday <= now:
+        next_saturday = next_saturday + timedelta(days=7)
 
     for cfg in REPORTES_CONFIG:
         existing = db.query(ReporteProgramado).filter(
@@ -152,20 +154,28 @@ def _seed_reportes_programados(db):
                 tipo_reporte="individual",
                 vendedor_obuma_id=cfg["vendedor_obuma_id"],
                 frecuencia="semanal",
-                dia_semana=4,
-                hora=23,
-                minuto=0,
+                dia_semana=5,
+                hora=6,
+                minuto=30,
                 emails_destino=emails,
                 filtro_fecha_tipo="mes_actual",
                 activo=True,
                 total_enviados=0,
-                proxima_ejecucion=next_friday,
+                proxima_ejecucion=next_saturday,
             ))
         else:
             if GABRIEL_EMAIL not in (existing.emails_destino or ""):
                 existing.emails_destino = emails
+            # Migracion idempotente: mover viernes 23:00 -> sabado 06:30. Solo
+            # toca proxima_ejecucion cuando el horario aun no esta migrado, para
+            # no pisar la planificacion normal de process_scheduled_reports.
+            if existing.dia_semana != 5 or existing.hora != 6 or existing.minuto != 30:
+                existing.dia_semana = 5
+                existing.hora = 6
+                existing.minuto = 30
+                existing.proxima_ejecucion = next_saturday
     db.commit()
-    logger.info("Reportes programados seeded/verified (5 semanales viernes 23:00)")
+    logger.info("Reportes programados seeded/verified (5 semanales sabado 06:30)")
 
 
 def _auto_sync_current_month_items():

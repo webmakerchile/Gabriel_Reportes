@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import threading
 from datetime import datetime, date
 from collections import defaultdict
 from openpyxl import Workbook
@@ -18,6 +19,17 @@ from src.models.models import (
 from src.utils.date_filters import date_range_filters
 
 logger = logging.getLogger(__name__)
+
+# Candado global que serializa TODAS las sincronizaciones inmediatas de reportes.
+# Tanto los reportes de ventas (diario/semanal) como el de cartera/cobranza pasan
+# por sync_for_report. Como los lunes 06:30 el reporte diario y el de cobranza se
+# gatillan a la misma hora (y APScheduler corre los jobs en threads paralelos),
+# sin este candado ambos ejecutarian sync_ventas a la vez. Como ventas_historico
+# NO tiene constraint unico (tenant_id, obuma_id), dos inserts concurrentes de la
+# misma venta nueva crearian DUPLICADOS y corromperian los totales. El candado
+# garantiza que el segundo sync espere al primero y luego solo re-confirme datos
+# ya frescos (upsert idempotente, rapido tras la optimizacion bulk).
+_sync_report_lock = threading.Lock()
 
 HEADER_FONT = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
 HEADER_FILL = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
@@ -1171,6 +1183,10 @@ def sync_for_report(db, scope: str = "report") -> dict:
     loop = asyncio.new_event_loop()
     results = {}
     t0 = time.time()
+    # Serializa con cualquier otro sync de reportes en curso (ver _sync_report_lock).
+    if not _sync_report_lock.acquire(blocking=False):
+        logger.info(f"{scope}: otra sincronizacion en curso, esperando al candado de sync...")
+        _sync_report_lock.acquire()
     try:
         logger.info(f"{scope}: iniciando sync inmediato (clientes + ventas + items + cobros)...")
 
@@ -1221,6 +1237,7 @@ def sync_for_report(db, scope: str = "report") -> dict:
             loop.close()
         except Exception:
             pass
+        _sync_report_lock.release()
 
 
 def log_reconciliation_per_vendor(db, today=None, scope: str = "Reporte") -> None:

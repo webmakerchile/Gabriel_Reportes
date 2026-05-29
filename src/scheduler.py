@@ -131,17 +131,20 @@ def scheduled_sync_and_report():
         db.close()
 
 
-def weekly_friday_reports():
-    """Genera y envia reportes semanales solo los viernes a las 23:00 Chile.
+def weekly_saturday_reports():
+    """Genera y envia reportes semanales los sabados a las 06:30 Chile.
+    Se gatilla a la misma hora del reporte de cartera (06:30) para que el
+    sync inmediato ya este hecho y los vendedores reciban los datos frescos
+    a primera hora, como pidio el cliente.
     Sync inmediato + abort-on-failure: si el sync falla NO se envia el correo."""
-    logger.info("Ejecutando envio semanal de reportes (viernes 23:00)...")
+    logger.info("Ejecutando envio semanal de reportes (sabado 06:30)...")
     db = SessionLocal()
     try:
         today = date.today()
         date_from = date(today.year, 1, 1)
         date_to = today
         _generate_and_send_individual_reports(
-            db, date_from, date_to, scope="Reporte Semanal Viernes"
+            db, date_from, date_to, scope="Reporte Semanal Sabado"
         )
     except Exception as e:
         logger.error(f"Error en envio semanal de reportes: {e}", exc_info=True)
@@ -150,44 +153,22 @@ def weekly_friday_reports():
 
 
 def daily_weekday_reports():
-    """Reportes diarios automaticos lunes-jueves a las 23:00 Chile (post actividad de Obuma).
-    El viernes se omite porque ese dia se envia el reporte semanal a las 23:00.
+    """Reportes diarios automaticos lunes-viernes a las 06:30 Chile.
+    Se gatillan a la misma hora del reporte de cartera (06:30) para que el
+    sync inmediato ya este hecho y los vendedores reciban los datos frescos
+    a primera hora, como pidio el cliente.
     Sync inmediato + abort-on-failure: si el sync falla NO se envia el correo."""
     today = date.today()
-    # weekday(): lunes=0, martes=1, miercoles=2, jueves=3, viernes=4, sabado=5, domingo=6
-    if today.weekday() == 4:
-        logger.info("Viernes detectado: omitiendo reporte diario (se enviara el semanal a las 23:00).")
-        return
-    logger.info(f"Ejecutando envio diario de reportes ({today.strftime('%A')} 23:00)...")
+    logger.info(f"Ejecutando envio diario de reportes ({today.strftime('%A')} 06:30)...")
     db = SessionLocal()
     try:
         date_from = date(today.year, 1, 1)
         date_to = today
         _generate_and_send_individual_reports(
-            db, date_from, date_to, scope="Reporte Diario Lun-Jue"
+            db, date_from, date_to, scope="Reporte Diario Lun-Vie"
         )
     except Exception as e:
         logger.error(f"Error en envio diario de reportes: {e}", exc_info=True)
-    finally:
-        db.close()
-
-
-def weekend_morning_reports():
-    """Reportes de fin de semana sabado y domingo a las 09:00 Chile.
-    A esa hora la actividad del dia anterior en Obuma ya esta cerrada y
-    cualquier movimiento posterior se reflejara en el envio del lunes 23:00.
-    Sync inmediato + abort-on-failure: si el sync falla NO se envia el correo."""
-    today = date.today()
-    logger.info(f"Ejecutando envio de fin de semana ({today.strftime('%A')} 09:00)...")
-    db = SessionLocal()
-    try:
-        date_from = date(today.year, 1, 1)
-        date_to = today
-        _generate_and_send_individual_reports(
-            db, date_from, date_to, scope="Reporte Fin de Semana"
-        )
-    except Exception as e:
-        logger.error(f"Error en envio de fin de semana: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -815,23 +796,16 @@ def start_scheduler():
     )
     scheduler.add_job(
         daily_weekday_reports,
-        CronTrigger(day_of_week="mon-thu", hour=23, minute=0, timezone="America/Santiago"),
+        CronTrigger(day_of_week="mon-fri", hour=6, minute=30, timezone="America/Santiago"),
         id="daily_weekday_reports",
-        name="Envio Diario de Reportes - Lun-Jue 23:00 Chile",
+        name="Envio Diario de Reportes - Lun-Vie 06:30 Chile",
         replace_existing=True,
     )
     scheduler.add_job(
-        weekly_friday_reports,
-        CronTrigger(day_of_week="fri", hour=23, minute=0, timezone="America/Santiago"),
-        id="weekly_friday_reports",
-        name="Envio Semanal de Reportes - Viernes 23:00 Chile",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        weekend_morning_reports,
-        CronTrigger(day_of_week="sat,sun", hour=9, minute=0, timezone="America/Santiago"),
-        id="weekend_morning_reports",
-        name="Envio Reportes Fin de Semana - Sab-Dom 09:00 Chile",
+        weekly_saturday_reports,
+        CronTrigger(day_of_week="sat", hour=6, minute=30, timezone="America/Santiago"),
+        id="weekly_saturday_reports",
+        name="Envio Semanal de Reportes - Sabado 06:30 Chile",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -859,8 +833,8 @@ def start_scheduler():
     _scheduler_instance = scheduler
     logger.info(
         "Scheduler iniciado - Sync ligero diario 18:30 + "
-        "Reportes Lun-Jue 23:00 + Reporte Semanal viernes 23:00 + "
-        "Reportes Sab-Dom 09:00 + Cartera Cobranza por Vendedor lunes 06:30 (entrega ~09:00) + "
+        "Reportes Diarios Lun-Vie 06:30 + Reporte Semanal sabado 06:30 + "
+        "Cartera Cobranza por Vendedor lunes 06:30 + "
         "Verificacion programados cada 15 min + "
         "Monitor interno de salud cada 5 min "
         "(todos con sync inmediato + abort-on-failure)"
