@@ -44,7 +44,14 @@ This project is a Business Intelligence platform for Gabriel Hoyos (VLSur), desi
   - `ix_clientes_tenant_obuma` (composite `tenant_id, obuma_id`) — cura el N+1 de `sync_clientes`.
   - `ix_compras_obuma_id` — cura el N+1 de `sync_compras` (la query original no filtra por tenant_id).
 - *Mejora esperada:* O(n²) → O(n log n). El sync de 8015 clientes pasa de ~29 min a ~1-2 min. El overhead de mantener un índice extra en INSERT es despreciable comparado con eliminar 64M comparaciones por seq scan.
-- *Lo que NO se tocó:* La precarga ORM de `sync_ventas` (línea 681) ya evita N+1 con un cache en memoria, así que no requiere fix adicional. Si en el futuro `sync_ventas` se vuelve lento, el siguiente paso sería reescribir el patrón de upsert (e.g. `bulk_save_objects` o `INSERT ... ON CONFLICT`) en vez de objetos ORM con dirty checking.
+- *Lo que NO se tocó (en Fase 4):* La precarga ORM de `sync_ventas` ya evitaba N+1 con un cache en memoria. Ver Fase 5 para la optimización posterior cuando ese sync sí se volvió el cuello de botella.
+
+**Sync ETL Performance (Fase 5 — bulk upsert de ventas)**:
+- *Síntoma:* En producción el sync inmediato que dispara los reportes programados (`sync_for_report` → `sync_ventas`) tardaba ~2-3h para ~57.500 ventas. Los logs mostraban `Ventas sync progress: 26000/57506` tras ~1.5h y el job `check_scheduled_reports` (cada 15 min) se saltaba repetidamente con `WARNING ... skipped: maximum number of running instances reached (1)`. Resultado para el cliente: los reportes programados llegaban con horas de retraso o no llegaban (el tick siguiente nunca arrancaba porque el anterior seguía corriendo).
+- *Causa raíz:* `sync_ventas` (1) precargaba TODAS las filas de `VentaHistorico` como objetos ORM completos (incluido el `Text` `detalle` con el JSON crudo de cada venta) a la identity map, y (2) hacía dirty-checking objeto-por-objeto en el loop (unit-of-work del ORM emite un UPDATE por objeto). Con ~57.500 filas eran ~57.500 UPDATEs vía ORM (~464 filas/min medido).
+- *Fix:* (a) la precarga ahora trae solo `(obuma_id, id)` en vez de objetos completos; (b) el loop acumula `update_mappings`/`insert_mappings` y los vuelca con `bulk_update_mappings`/`bulk_insert_mappings` cada `batch_size=2000` (mismo punto de commit/log de progreso que antes). Semántica idéntica: mismos campos, misma regla de stale-delete (`existing_cache.keys() - api_obuma_ids`), mismos defaults (`sincronizado_at` server_default y `anulada` se preservan). 82/82 tests pasan.
+- *Mejora esperada:* de ~2-3h a unos pocos minutos. Al terminar rápido, el sync ya no solapa con el tick de 15 min y desaparecen los `maximum running instances reached`.
+- *Si en el futuro hace falta más:* `sync_ventas_items_incremental` y `sync_ventas_cobros` siguen con patrón ORM; si crecen lo suficiente, aplicar el mismo enfoque bulk.
 
 **Critical Handling of Credit/Debit Notes**:
 - **Sales/Margin/Dashboard Reports**: Credit Notes (NC) are subtracted from sales, Debit Notes (ND) are added.

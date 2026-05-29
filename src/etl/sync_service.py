@@ -677,15 +677,40 @@ class SyncService:
             if c.obuma_id:
                 cliente_cache[c.obuma_id] = c.id
 
+        # Preload solo (obuma_id -> id) en vez de objetos ORM completos.
+        # Antes cargabamos 57k+ filas COMPLETAS (incluido el Text `detalle` con
+        # el JSON crudo de cada venta) a la identity map de la sesion: lento y
+        # con mucha memoria. Solo necesitamos el id para decidir UPDATE vs INSERT.
         existing_cache = {}
-        for v in self.db.query(VentaHistorico).filter(VentaHistorico.tenant_id == self.tenant_id).all():
-            if v.obuma_id:
-                existing_cache[v.obuma_id] = v
+        for obuma_id_db, venta_id_db in (
+            self.db.query(VentaHistorico.obuma_id, VentaHistorico.id)
+            .filter(VentaHistorico.tenant_id == self.tenant_id)
+            .all()
+        ):
+            if obuma_id_db:
+                existing_cache[obuma_id_db] = venta_id_db
 
         api_obuma_ids = set()
         count = 0
         total_api = 0.0
         batch_size = 2000
+        # Acumulamos mappings y los volcamos con bulk_*_mappings cada batch.
+        # Esto evita el unit-of-work / dirty-checking objeto-por-objeto del ORM,
+        # que hacia que el sync de ~57k ventas tardara ~2-3h en produccion y
+        # bloqueara el scheduler (jobs "skipped: maximum running instances").
+        update_mappings = []
+        insert_mappings = []
+
+        def _flush_ventas():
+            if update_mappings:
+                self.db.bulk_update_mappings(VentaHistorico, update_mappings)
+            if insert_mappings:
+                self.db.bulk_insert_mappings(VentaHistorico, insert_mappings)
+            if update_mappings or insert_mappings:
+                self.db.commit()
+            update_mappings.clear()
+            insert_mappings.clear()
+
         for item in items:
             obuma_id = str(item.get("venta_id", item.get("id", "")))
             api_obuma_ids.add(obuma_id)
@@ -711,51 +736,40 @@ class SyncService:
             anulada = str(item.get("venta_anulada", "0")) == "1"
             estado = "Anulada" if anulada else item.get("venta_estado", "Vigente")
 
-            existing = existing_cache.get(obuma_id)
-            if existing:
-                existing.cliente_id = cliente_db_id
-                existing.vendedor_id = vendedor_id_val
-                existing.fecha = fecha
-                existing.tipo_documento = tipo_dcto
-                existing.folio = folio
-                existing.subtotal = neto
-                existing.impuestos = iva
-                existing.total = total
-                existing.estado = estado
-                existing.detalle = self._to_json(item)
-                existing.costo_total = costo
-                existing.margen_neto = utilidad if utilidad else (neto - costo)
-                existing.total_pagado = self._safe_float(item.get("venta_total_pagado", 0))
-                existing.total_por_pagar = self._safe_float(item.get("venta_total_por_pagar", 0))
-                existing.anulada = anulada
-                existing.observacion = item.get("venta_observacion", "")
+            row = {
+                "cliente_id": cliente_db_id,
+                "vendedor_id": vendedor_id_val,
+                "fecha": fecha,
+                "tipo_documento": tipo_dcto,
+                "folio": folio,
+                "subtotal": neto,
+                "impuestos": iva,
+                "total": total,
+                "estado": estado,
+                "detalle": self._to_json(item),
+                "costo_total": costo,
+                "margen_neto": utilidad if utilidad else (neto - costo),
+                "total_pagado": self._safe_float(item.get("venta_total_pagado", 0)),
+                "total_por_pagar": self._safe_float(item.get("venta_total_por_pagar", 0)),
+                "anulada": anulada,
+                "observacion": item.get("venta_observacion", ""),
+            }
+
+            existing_id = existing_cache.get(obuma_id)
+            if existing_id is not None:
+                row["id"] = existing_id
+                update_mappings.append(row)
             else:
-                venta = VentaHistorico(
-                    tenant_id=self.tenant_id,
-                    obuma_id=obuma_id,
-                    cliente_id=cliente_db_id,
-                    vendedor_id=vendedor_id_val,
-                    fecha=fecha,
-                    tipo_documento=tipo_dcto,
-                    folio=folio,
-                    subtotal=neto,
-                    impuestos=iva,
-                    total=total,
-                    estado=estado,
-                    detalle=self._to_json(item),
-                    costo_total=costo,
-                    margen_neto=utilidad if utilidad else (neto - costo),
-                    total_pagado=self._safe_float(item.get("venta_total_pagado", 0)),
-                    total_por_pagar=self._safe_float(item.get("venta_total_por_pagar", 0)),
-                    anulada=anulada,
-                    observacion=item.get("venta_observacion", ""),
-                )
-                self.db.add(venta)
+                row["tenant_id"] = self.tenant_id
+                row["obuma_id"] = obuma_id
+                insert_mappings.append(row)
             count += 1
 
             if count % batch_size == 0:
-                self.db.commit()
+                _flush_ventas()
                 logger.info(f"Ventas sync progress: {count}/{len(items)}")
+
+        _flush_ventas()
 
         stale_ids = set(existing_cache.keys()) - api_obuma_ids
         if stale_ids:
