@@ -503,6 +503,16 @@ def generate_vendedor_report(
         set(cli.id for _, cli in cartera_clients) if cartera_clients else set()
     )
 
+    def _parse_data_json(raw):
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {}
+
     excluded_db_ids = set()
     inactive_entries = (
         db.query(VendedorCartera)
@@ -512,7 +522,26 @@ def generate_vendedor_report(
         )
         .all()
     )
+    inactive_cli_ids = [ie.cliente_id for ie in inactive_entries]
+    # Una entrada de cartera inactiva NO debe excluir a un cliente que Obuma
+    # SIGUE asignando a este vendedor: la cartera local quedo desactualizada y
+    # _sync_cartera_from_clientes nunca la reactiva ("respeta cambios manuales").
+    # Sin esto, clientes con ventas reales (p.ej. asignados de vuelta al
+    # vendedor en Obuma) desaparecian del reporte. Usamos la misma fuente de
+    # verdad (rel_usuario_id de ClienteFinal.data_json) que ya se aplica en el
+    # loop de ventas mas abajo para incluir clientes fuera de cartera.
+    live_vendedor_by_cli = {}
+    if inactive_cli_ids:
+        for cli in (
+            db.query(ClienteFinal)
+            .filter(ClienteFinal.id.in_(inactive_cli_ids))
+            .all()
+        ):
+            dj = _parse_data_json(cli.data_json)
+            live_vendedor_by_cli[cli.id] = str(dj.get("rel_usuario_id", ""))
     for ie in inactive_entries:
+        if live_vendedor_by_cli.get(ie.cliente_id) == str(vendedor_obuma_id):
+            continue
         excluded_db_ids.add(ie.cliente_id)
 
     reassigned_entries = (
@@ -524,16 +553,6 @@ def generate_vendedor_report(
         .all()
     )
     reassigned_db_ids = set(re.cliente_id for re in reassigned_entries)
-
-    def _parse_data_json(raw):
-        if isinstance(raw, dict):
-            return raw
-        if isinstance(raw, str):
-            try:
-                return json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return {}
 
     for v in ventas:
         ckey = None

@@ -1,0 +1,1 @@
+- [sync_clientes savepoint vs rollback](sync-savepoint-rollback.md) — per-row insert failures must use begin_nested SAVEPOINT, never db.rollback() (wipes whole run, drops clients silently → placeholder names in reports).

@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from src.etl.obuma_client import ObumaClient
 from src.models.models import (
     VentaHistorico, CompraHistorico, Producto, ContabilidadHistorico,
@@ -147,6 +148,7 @@ class SyncService:
         # Track obuma_ids returned by API to mark missing ones as inactive
         api_obuma_ids = set()
         count = 0
+        skipped = 0
         for item in items:
             obuma_id = self._safe_str(item.get("cliente_id", item.get("id", "")))
             if not obuma_id:
@@ -220,14 +222,34 @@ class SyncService:
                     activo=is_activo,
                     data_json=self._to_json(item),
                 )
-                self.db.add(cliente)
                 try:
-                    self.db.flush()
-                except Exception:
-                    self.db.rollback()
+                    with self.db.begin_nested():
+                        self.db.add(cliente)
+                        self.db.flush()
+                except IntegrityError:
+                    # El rut real colisiona con (tenant_id, rut) de otro cliente.
+                    # Reintentamos con un rut sintetico OBU-{id}. Usamos un
+                    # SAVEPOINT (begin_nested) en vez de self.db.rollback(): un
+                    # rollback global revertia TODA la sesion, descartando todos
+                    # los clientes nuevos ya insertados en la misma corrida. Esos
+                    # clientes nunca se reintentaban y reaparecian como
+                    # "Cliente {id}" en los reportes (gap fijo API vs DB).
+                    # Solo IntegrityError: cualquier otro error de DB se propaga
+                    # para abortar el sync (estado=error) en vez de silenciarlo.
                     cliente.rut = f"OBU-{obuma_id}"
-                    self.db.add(cliente)
-                    self.db.flush()
+                    try:
+                        with self.db.begin_nested():
+                            self.db.add(cliente)
+                            self.db.flush()
+                    except IntegrityError:
+                        logger.warning(
+                            f"sync_clientes: no se pudo insertar cliente "
+                            f"obuma_id={obuma_id} (rut={rut_raw!r}); se omite "
+                            f"esta corrida.",
+                            exc_info=True,
+                        )
+                        skipped += 1
+                        continue
             count += 1
 
         try:
@@ -236,11 +258,22 @@ class SyncService:
             self.db.rollback()
             raise
         db_count = self.db.query(ClienteFinal).filter(ClienteFinal.tenant_id == self.tenant_id).count()
-        self._log_sync("clientes", len(items), db_count, 0)
+        # Reportamos los clientes omitidos por colision de rut irrecuperable en
+        # discrepancias/detalle para no marcar un "ok" silencioso si hubo fallos.
+        detalle = (
+            f"{skipped} clientes omitidos por colision de rut" if skipped else None
+        )
+        self._log_sync("clientes", len(items), db_count, skipped, detalle=detalle)
 
         cartera_result = self._sync_cartera_from_clientes()
 
-        return {"synced": count, "total_api": len(items), "total_db": db_count, "cartera": cartera_result}
+        return {
+            "synced": count,
+            "skipped": skipped,
+            "total_api": len(items),
+            "total_db": db_count,
+            "cartera": cartera_result,
+        }
 
     def _sync_cartera_from_clientes(self) -> dict:
         TRACKED_VENDEDORES = ['28856', '28886', '28887', '28891', '28892']
