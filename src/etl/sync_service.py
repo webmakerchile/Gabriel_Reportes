@@ -188,17 +188,49 @@ class SyncService:
                     unique_rut = rut_raw if not rut_owner else f"OBU-{obuma_id}"
                 else:
                     unique_rut = existing.rut if existing.rut else f"OBU-{obuma_id}"
-                existing.nombre = nombre or existing.nombre
-                existing.email = email or existing.email
-                existing.telefono = telefono or existing.telefono
-                existing.direccion = direccion or existing.direccion
-                existing.giro = giro or existing.giro
-                existing.comuna = comuna or existing.comuna
-                existing.ciudad = ciudad or existing.ciudad
-                existing.obuma_id = obuma_id
-                existing.rut = unique_rut
-                existing.activo = is_activo
-                existing.data_json = self._to_json(item)
+
+                def _apply_existing(rut_value):
+                    existing.nombre = nombre or existing.nombre
+                    existing.email = email or existing.email
+                    existing.telefono = telefono or existing.telefono
+                    existing.direccion = direccion or existing.direccion
+                    existing.giro = giro or existing.giro
+                    existing.comuna = comuna or existing.comuna
+                    existing.ciudad = ciudad or existing.ciudad
+                    existing.obuma_id = obuma_id
+                    existing.rut = rut_value
+                    existing.activo = is_activo
+                    existing.data_json = self._to_json(item)
+
+                # Aplicamos y flusheamos la actualizacion en su PROPIO savepoint,
+                # por item. Si el rut real colisiona (Obuma a veces trae el mismo
+                # rut en dos clientes distintos), revertimos SOLO esta fila con
+                # expire() y reintentamos con un rut sintetico OBU-{id}.
+                # El expire() es imprescindible: tras revertir el savepoint el
+                # objeto persistente sigue "sucio" en la sesion; sin descartarlo,
+                # se re-flushea en el siguiente item y vuelve a fallar, envenenando
+                # la transaccion entera. Eso hacia que el commit final abortara y
+                # se cayera TODO el sync de clientes (que ademas, por la regla de
+                # abort-on-failure, bloqueaba el envio de los reportes).
+                try:
+                    with self.db.begin_nested():
+                        _apply_existing(unique_rut)
+                        self.db.flush()
+                except IntegrityError:
+                    self.db.expire(existing)
+                    try:
+                        with self.db.begin_nested():
+                            _apply_existing(f"OBU-{obuma_id}")
+                            self.db.flush()
+                    except IntegrityError:
+                        self.db.expire(existing)
+                        logger.warning(
+                            f"sync_clientes: no se pudo actualizar cliente "
+                            f"obuma_id={obuma_id} (rut={rut_raw!r}); se omite.",
+                            exc_info=True,
+                        )
+                        skipped += 1
+                        continue
             else:
                 unique_rut = f"OBU-{obuma_id}"
                 if is_valid_rut:
@@ -236,6 +268,14 @@ class SyncService:
                     # "Cliente {id}" en los reportes (gap fijo API vs DB).
                     # Solo IntegrityError: cualquier otro error de DB se propaga
                     # para abortar el sync (estado=error) en vez de silenciarlo.
+                    # Tras revertir el savepoint, un objeto NUEVO normalmente queda
+                    # auto-expulsado (transient) de la sesion; lo expulsamos de
+                    # forma explicita si aun sigue presente para garantizar, en
+                    # cualquier version de SQLAlchemy, que no quede una insercion
+                    # pendiente que se re-flushee y vuelva a envenenar la
+                    # transaccion en el siguiente item.
+                    if cliente in self.db:
+                        self.db.expunge(cliente)
                     cliente.rut = f"OBU-{obuma_id}"
                     try:
                         with self.db.begin_nested():
