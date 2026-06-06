@@ -395,6 +395,29 @@ def _generate_and_send_individual_reports(db, date_from, date_to, scope: str = "
     logger.info(f"Reportes generados: {len(all_filepaths)} archivos")
 
 
+def _is_cron_managed_weekly(sched) -> bool:
+    """True si la fila la envia un cron dedicado y NO debe reenviarla este job.
+
+    Las 5 filas semilla (semanal + individual + sabado[dia_semana=5] +
+    vendedor trackeado) ya las emite el cron `weekly_saturday_reports`. Si
+    `process_scheduled_reports` tambien las enviara, cada vendedor recibiria el
+    correo semanal DUPLICADO el sabado. Las filas siguen activas (no se borran)
+    porque guardan `emails_destino` que leen los crons diario/semanal y la
+    cobranza del lunes; aqui solo se las excluye del ENVIO.
+
+    Discriminador seguro: la UI del dashboard solo permite programar dias
+    Lunes-Viernes (dia_semana 0-4), por lo que `dia_semana == 5` es exclusivo de
+    las filas semilla. Ninguna programacion creada por el usuario cae en este
+    caso, asi que no se suprime nada que el usuario haya configurado a mano.
+    """
+    return (
+        sched.frecuencia == "semanal"
+        and sched.tipo_reporte == "individual"
+        and sched.dia_semana == 5
+        and str(sched.vendedor_obuma_id) in TRACKED_VENDEDOR_IDS
+    )
+
+
 def process_scheduled_reports():
     from src.models.models import ReporteProgramado, Empleado
 
@@ -408,7 +431,13 @@ def process_scheduled_reports():
 
         # Pre-check: ¿hay algun reporte realmente listo para ejecutar?
         # Solo en ese caso justificamos pagar el costo del sync inmediato.
-        due_schedules = [s for s in schedules if _should_execute(s, now)]
+        # Excluimos las filas semilla del semanal de sabado: las envia el cron
+        # `weekly_saturday_reports`, asi que reenviarlas aqui duplicaria el correo.
+        due_schedules = [
+            s
+            for s in schedules
+            if _should_execute(s, now) and not _is_cron_managed_weekly(s)
+        ]
         if not due_schedules:
             return
 
