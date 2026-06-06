@@ -47,3 +47,13 @@ update path (existing/persistent objects).
 - Self-healing of stale source data only happens when the sync actually RUNS
   (scheduler or a manual dashboard trigger); if the API/sync endpoints aren't
   publicly reachable, an external curl can't kick it off.
+
+**Production lag trap (observed in prod):** a merged sync fix does NOTHING for the
+scheduled reports until the user REPUBLISHES. The deployment is a VM running the
+last `Published your App` commit, not `main`. Symptom: reports stop arriving on a
+given morning; deployment logs show the daily cron firing then
+`Reporte ... sync inmediato FALLO -- NO se envia ningun correo` with a
+`UniqueViolation` traceback whose line numbers DON'T match current `sync_service.py`
+(proof prod runs older code). To confirm, compare `git log --oneline`: if the fix
+commit is ABOVE the last `Published your App`, prod is stale → tell user to redeploy.
+The fix already in code is correct; the action is republish, not another code change.
