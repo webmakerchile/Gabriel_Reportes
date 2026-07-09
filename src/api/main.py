@@ -130,8 +130,9 @@ def _seed_reportes_programados(db):
     GABRIEL_EMAIL = "gabrielhoyos@vlsur.cl"
 
     now = datetime.now()
-    # El reporte semanal ahora sale los SABADOS 06:30 (misma hora que cartera),
-    # antes viernes 23:00. weekday(): lunes=0 ... sabado=5.
+    # El reporte semanal ahora sale los SABADOS 06:30, antes viernes 23:00.
+    # (La cartera/cobranza del lunes corre aparte, a las 05:30, para llegar
+    # antes de las 09:00.) weekday(): lunes=0 ... sabado=5.
     days_until_saturday = (5 - now.weekday()) % 7
     next_saturday = (now + timedelta(days=days_until_saturday)).replace(hour=6, minute=30, second=0, microsecond=0)
     if next_saturday <= now:

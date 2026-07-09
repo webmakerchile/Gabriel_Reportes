@@ -139,6 +139,23 @@ class SyncService:
         return cliente.id
 
     async def sync_clientes(self) -> dict:
+        """Sync de clientes con patron BULK (Fase 6, mismo enfoque que Fase 5
+        en ventas): precarga en memoria de (obuma_id -> id/rut) y del indice
+        rut -> dueño, resolucion de colisiones de RUT EN MEMORIA (regla del rut
+        sintetico OBU-{id} intacta) y volcado por lotes con
+        bulk_update_mappings / bulk_insert_mappings.
+
+        Antes era fila-por-fila: 1-2 SELECTs + savepoint/flush POR CLIENTE
+        (~48 min medidos en produccion para 8.661 clientes). El bulk baja eso
+        al orden de segundos/minutos, clave para que el reporte de cobranza
+        del lunes llegue antes de las 09:00.
+
+        Si un lote choca con la constraint unica (tenant_id, rut) — p.ej. otra
+        conexion insertando en paralelo — hay fallback fila-por-fila SOLO para
+        ese lote, con el mismo reintento OBU-{id} y conteo de `skipped` que la
+        version anterior. Cualquier error de DB que no sea IntegrityError se
+        propaga para abortar el sync (abort-on-failure aguas arriba).
+        """
         data = await self.client.get_clientes_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("clientes", 0, 0, 0, estado="error", detalle=str(data.get("error")))
@@ -149,6 +166,30 @@ class SyncService:
         api_obuma_ids = set()
         count = 0
         skipped = 0
+
+        # ── Precarga en memoria: 1 query en vez de 1-2 SELECTs por cliente ──
+        existing_rows = (
+            self.db.query(ClienteFinal.id, ClienteFinal.obuma_id, ClienteFinal.rut)
+            .filter(ClienteFinal.tenant_id == self.tenant_id)
+            .all()
+        )
+        # obuma_id -> {"id": pk, "rut": rut_actual} (solo filas con obuma_id)
+        by_obuma = {}
+        # rut -> row_key; row_key = ("db", pk) para filas existentes,
+        #                           ("new", obuma_id) para inserts pendientes.
+        rut_owner_map = {}
+        for pk, oid, rut in existing_rows:
+            if oid:
+                by_obuma[oid] = {"id": pk, "rut": rut}
+            if rut:
+                rut_owner_map[rut] = ("db", pk)
+
+        update_mappings = []
+        insert_mappings = []
+        # obuma_id -> mapping dict pendiente de insert (por si el API trae el
+        # mismo cliente_id dos veces en el lote: el segundo actua como update).
+        pending_by_obuma = {}
+
         for item in items:
             obuma_id = self._safe_str(item.get("cliente_id", item.get("id", "")))
             if not obuma_id:
@@ -169,128 +210,114 @@ class SyncService:
 
             is_valid_rut = bool(rut_raw and re.match(r'^\d{1,2}\.\d{3}\.\d{3}-[\dkK]$', rut_raw))
 
-            existing = self.db.query(ClienteFinal).filter(
-                ClienteFinal.obuma_id == obuma_id,
-                ClienteFinal.tenant_id == self.tenant_id
-            ).first()
-
             # Determine activo from Obuma field (1=active, 0=inactive)
             cliente_activo_raw = item.get("cliente_activo", 1)
             is_activo = bool(int(cliente_activo_raw or 1))
 
-            if existing:
+            existing = by_obuma.get(obuma_id)
+            pending = pending_by_obuma.get(obuma_id)
+
+            if existing is not None:
+                row_key = ("db", existing["id"])
+                old_rut = existing["rut"]
                 if is_valid_rut:
-                    rut_owner = self.db.query(ClienteFinal).filter(
-                        ClienteFinal.rut == rut_raw,
-                        ClienteFinal.tenant_id == self.tenant_id,
-                        ClienteFinal.obuma_id != obuma_id
-                    ).first()
-                    unique_rut = rut_raw if not rut_owner else f"OBU-{obuma_id}"
+                    owner = rut_owner_map.get(rut_raw)
+                    # Mismo criterio que antes: el rut real solo se usa si nadie
+                    # mas (otra fila) lo tiene; si esta tomado -> OBU-{id}.
+                    unique_rut = rut_raw if owner is None or owner == row_key else f"OBU-{obuma_id}"
                 else:
-                    unique_rut = existing.rut if existing.rut else f"OBU-{obuma_id}"
+                    unique_rut = old_rut if old_rut else f"OBU-{obuma_id}"
 
-                def _apply_existing(rut_value):
-                    existing.nombre = nombre or existing.nombre
-                    existing.email = email or existing.email
-                    existing.telefono = telefono or existing.telefono
-                    existing.direccion = direccion or existing.direccion
-                    existing.giro = giro or existing.giro
-                    existing.comuna = comuna or existing.comuna
-                    existing.ciudad = ciudad or existing.ciudad
-                    existing.obuma_id = obuma_id
-                    existing.rut = rut_value
-                    existing.activo = is_activo
-                    existing.data_json = self._to_json(item)
+                # Solo campos con valor: omitirlos del mapping preserva el valor
+                # existente en DB (mismo efecto que `nombre or existing.nombre`).
+                m = {
+                    "id": existing["id"],
+                    "obuma_id": obuma_id,
+                    "rut": unique_rut,
+                    "activo": is_activo,
+                    "data_json": self._to_json(item),
+                }
+                if nombre:
+                    m["nombre"] = nombre
+                if email:
+                    m["email"] = email
+                if telefono:
+                    m["telefono"] = telefono
+                if direccion:
+                    m["direccion"] = direccion
+                if giro:
+                    m["giro"] = giro
+                if comuna:
+                    m["comuna"] = comuna
+                if ciudad:
+                    m["ciudad"] = ciudad
+                update_mappings.append(m)
 
-                # Aplicamos y flusheamos la actualizacion en su PROPIO savepoint,
-                # por item. Si el rut real colisiona (Obuma a veces trae el mismo
-                # rut en dos clientes distintos), revertimos SOLO esta fila con
-                # expire() y reintentamos con un rut sintetico OBU-{id}.
-                # El expire() es imprescindible: tras revertir el savepoint el
-                # objeto persistente sigue "sucio" en la sesion; sin descartarlo,
-                # se re-flushea en el siguiente item y vuelve a fallar, envenenando
-                # la transaccion entera. Eso hacia que el commit final abortara y
-                # se cayera TODO el sync de clientes (que ademas, por la regla de
-                # abort-on-failure, bloqueaba el envio de los reportes).
-                try:
-                    with self.db.begin_nested():
-                        _apply_existing(unique_rut)
-                        self.db.flush()
-                except IntegrityError:
-                    self.db.expire(existing)
-                    try:
-                        with self.db.begin_nested():
-                            _apply_existing(f"OBU-{obuma_id}")
-                            self.db.flush()
-                    except IntegrityError:
-                        self.db.expire(existing)
-                        logger.warning(
-                            f"sync_clientes: no se pudo actualizar cliente "
-                            f"obuma_id={obuma_id} (rut={rut_raw!r}); se omite.",
-                            exc_info=True,
-                        )
-                        skipped += 1
-                        continue
-            else:
-                unique_rut = f"OBU-{obuma_id}"
+                # Mantener los indices en memoria coherentes con lo que quedara
+                # en DB (replica el flush-por-item de la version anterior).
+                if old_rut and old_rut != unique_rut and rut_owner_map.get(old_rut) == row_key:
+                    del rut_owner_map[old_rut]
+                rut_owner_map[unique_rut] = row_key
+                existing["rut"] = unique_rut
+            elif pending is not None:
+                # cliente_id duplicado dentro del mismo lote del API: el segundo
+                # item actualiza el insert pendiente (antes: query lo encontraba
+                # flusheado y hacia update).
+                row_key = ("new", obuma_id)
+                old_rut = pending["rut"]
                 if is_valid_rut:
-                    rut_owner = self.db.query(ClienteFinal).filter(
-                        ClienteFinal.rut == rut_raw,
-                        ClienteFinal.tenant_id == self.tenant_id
-                    ).first()
-                    if not rut_owner:
-                        unique_rut = rut_raw
-                cliente = ClienteFinal(
-                    tenant_id=self.tenant_id,
-                    rut=unique_rut,
-                    nombre=nombre or "Sin nombre",
-                    email=email,
-                    telefono=telefono,
-                    direccion=direccion,
-                    giro=giro,
-                    comuna=comuna,
-                    ciudad=ciudad,
-                    obuma_id=obuma_id,
-                    activo=is_activo,
-                    data_json=self._to_json(item),
-                )
-                try:
-                    with self.db.begin_nested():
-                        self.db.add(cliente)
-                        self.db.flush()
-                except IntegrityError:
-                    # El rut real colisiona con (tenant_id, rut) de otro cliente.
-                    # Reintentamos con un rut sintetico OBU-{id}. Usamos un
-                    # SAVEPOINT (begin_nested) en vez de self.db.rollback(): un
-                    # rollback global revertia TODA la sesion, descartando todos
-                    # los clientes nuevos ya insertados en la misma corrida. Esos
-                    # clientes nunca se reintentaban y reaparecian como
-                    # "Cliente {id}" en los reportes (gap fijo API vs DB).
-                    # Solo IntegrityError: cualquier otro error de DB se propaga
-                    # para abortar el sync (estado=error) en vez de silenciarlo.
-                    # Tras revertir el savepoint, un objeto NUEVO normalmente queda
-                    # auto-expulsado (transient) de la sesion; lo expulsamos de
-                    # forma explicita si aun sigue presente para garantizar, en
-                    # cualquier version de SQLAlchemy, que no quede una insercion
-                    # pendiente que se re-flushee y vuelva a envenenar la
-                    # transaccion en el siguiente item.
-                    if cliente in self.db:
-                        self.db.expunge(cliente)
-                    cliente.rut = f"OBU-{obuma_id}"
-                    try:
-                        with self.db.begin_nested():
-                            self.db.add(cliente)
-                            self.db.flush()
-                    except IntegrityError:
-                        logger.warning(
-                            f"sync_clientes: no se pudo insertar cliente "
-                            f"obuma_id={obuma_id} (rut={rut_raw!r}); se omite "
-                            f"esta corrida.",
-                            exc_info=True,
-                        )
-                        skipped += 1
-                        continue
+                    owner = rut_owner_map.get(rut_raw)
+                    unique_rut = rut_raw if owner is None or owner == row_key else f"OBU-{obuma_id}"
+                else:
+                    unique_rut = old_rut
+                if nombre:
+                    pending["nombre"] = nombre
+                if email:
+                    pending["email"] = email
+                if telefono:
+                    pending["telefono"] = telefono
+                if direccion:
+                    pending["direccion"] = direccion
+                if giro:
+                    pending["giro"] = giro
+                if comuna:
+                    pending["comuna"] = comuna
+                if ciudad:
+                    pending["ciudad"] = ciudad
+                pending["rut"] = unique_rut
+                pending["activo"] = is_activo
+                pending["data_json"] = self._to_json(item)
+                if old_rut != unique_rut and rut_owner_map.get(old_rut) == row_key:
+                    del rut_owner_map[old_rut]
+                rut_owner_map[unique_rut] = row_key
+                continue  # ya contado cuando se encolo el insert
+            else:
+                row_key = ("new", obuma_id)
+                unique_rut = f"OBU-{obuma_id}"
+                if is_valid_rut and rut_owner_map.get(rut_raw) is None:
+                    unique_rut = rut_raw
+                m = {
+                    "tenant_id": self.tenant_id,
+                    "rut": unique_rut,
+                    "nombre": nombre or "Sin nombre",
+                    "email": email,
+                    "telefono": telefono,
+                    "direccion": direccion,
+                    "giro": giro,
+                    "comuna": comuna,
+                    "ciudad": ciudad,
+                    "obuma_id": obuma_id,
+                    "activo": is_activo,
+                    "data_json": self._to_json(item),
+                }
+                insert_mappings.append(m)
+                pending_by_obuma[obuma_id] = m
+                rut_owner_map[unique_rut] = row_key
             count += 1
+
+        # ── Volcado por lotes + commit (con fallback fila-por-fila) ──
+        skipped += self._flush_clientes_mappings(update_mappings, insert_mappings)
+        count -= skipped
 
         try:
             self.db.commit()
@@ -315,68 +342,153 @@ class SyncService:
             "cartera": cartera_result,
         }
 
+    def _flush_clientes_mappings(self, update_mappings, insert_mappings, batch_size=1000):
+        """Vuelca los mappings de clientes por lotes. Retorna cuantas filas se
+        omitieron (skipped) tras agotar el reintento OBU-{id}.
+
+        Camino rapido: bulk_update_mappings / bulk_insert_mappings por lote
+        dentro de un SAVEPOINT. Si el lote entero falla por IntegrityError
+        (colision (tenant_id, rut) inesperada, p.ej. escrituras concurrentes),
+        se reintenta ESE lote fila por fila con la misma semantica que la
+        version anterior: primero el rut calculado, luego OBU-{id}, y si ambos
+        fallan la fila se omite y se cuenta en skipped. Errores que no sean
+        IntegrityError se propagan (abort-on-failure aguas arriba)."""
+        skipped = 0
+        for mappings, is_insert in ((update_mappings, False), (insert_mappings, True)):
+            for i in range(0, len(mappings), batch_size):
+                chunk = mappings[i:i + batch_size]
+                try:
+                    with self.db.begin_nested():
+                        if is_insert:
+                            self.db.bulk_insert_mappings(ClienteFinal, chunk)
+                        else:
+                            self.db.bulk_update_mappings(ClienteFinal, chunk)
+                except IntegrityError:
+                    logger.warning(
+                        f"sync_clientes: IntegrityError en lote bulk de "
+                        f"{'inserts' if is_insert else 'updates'} "
+                        f"({len(chunk)} filas); reintentando fila por fila...",
+                    )
+                    skipped += self._flush_clientes_rows_individually(chunk, is_insert)
+        return skipped
+
+    def _flush_clientes_rows_individually(self, mappings, is_insert):
+        """Fallback lento por fila: reintenta cada mapping con su rut y luego
+        con OBU-{obuma_id}. Retorna el numero de filas omitidas."""
+        skipped = 0
+        for m in mappings:
+            applied = False
+            rut_original = m.get("rut")
+            rut_fallback = f"OBU-{m.get('obuma_id')}"
+            intentos = [rut_original] if rut_original == rut_fallback else [rut_original, rut_fallback]
+            for rut_try in intentos:
+                mm = dict(m)
+                mm["rut"] = rut_try
+                try:
+                    with self.db.begin_nested():
+                        if is_insert:
+                            self.db.bulk_insert_mappings(ClienteFinal, [mm])
+                        else:
+                            self.db.bulk_update_mappings(ClienteFinal, [mm])
+                    applied = True
+                    break
+                except IntegrityError:
+                    continue
+            if not applied:
+                accion = "insertar" if is_insert else "actualizar"
+                logger.warning(
+                    f"sync_clientes: no se pudo {accion} cliente "
+                    f"obuma_id={m.get('obuma_id')} (rut={rut_original!r}); se omite esta corrida."
+                )
+                skipped += 1
+        return skipped
+
     def _sync_cartera_from_clientes(self) -> dict:
+        """Barrido de cartera de vendedores SIN N+1 (Fase 6).
+
+        Antes: 2-3 queries POR CLIENTE (~8.600 clientes = ~20.000+ queries).
+        Ahora: 2 queries de precarga (clientes livianos + TODAS las
+        asignaciones del tenant), decision en memoria, y volcado batch
+        (UPDATE ... WHERE id IN (...) + bulk_insert_mappings).
+
+        Semantica identica a la version anterior:
+        - Cliente sin vendedor tracked / inactivo -> desactivar asignaciones activas.
+        - Cliente con vendedor tracked -> desactivar asignaciones activas de OTROS
+          vendedores; si ya existe asignacion (activa O inactiva) para el vendedor
+          correcto se respeta tal cual (no reactivar lo que Gabriel desactivo);
+          si no existe, se crea activa.
+        """
         TRACKED_VENDEDORES = ['28856', '28886', '28887', '28891', '28892']
         added = 0
         deactivated = 0
+        hoy = datetime.now().date()
 
-        clientes = self.db.query(ClienteFinal).filter(
+        clientes = self.db.query(ClienteFinal.id, ClienteFinal.data_json).filter(
             ClienteFinal.tenant_id == self.tenant_id,
             ClienteFinal.data_json.isnot(None)
         ).all()
 
-        for cli in clientes:
+        asignaciones = self.db.query(
+            VendedorCartera.id,
+            VendedorCartera.cliente_id,
+            VendedorCartera.empleado_obuma_id,
+            VendedorCartera.activo,
+        ).filter(VendedorCartera.tenant_id == self.tenant_id).all()
+        asigs_by_cliente = {}
+        for a in asignaciones:
+            asigs_by_cliente.setdefault(a.cliente_id, []).append(a)
+
+        deactivate_ids = []
+        insert_mappings = []
+
+        for cli_id, cli_data_json in clientes:
             try:
-                data = json.loads(cli.data_json) if isinstance(cli.data_json, str) else cli.data_json
+                data = json.loads(cli_data_json) if isinstance(cli_data_json, str) else cli_data_json
             except (json.JSONDecodeError, TypeError):
                 continue
 
             cliente_activo = str(data.get('cliente_activo', '1') or '1')
             rel_usuario_id = str(data.get('rel_usuario_id', '0') or '0')
+            asigs = asigs_by_cliente.get(cli_id, [])
+
             if rel_usuario_id == '0' or rel_usuario_id not in TRACKED_VENDEDORES or cliente_activo == '0':
                 # Cliente sin vendedor tracked: desactivar cualquier cartera activa
-                orphan_assignments = self.db.query(VendedorCartera).filter(
-                    VendedorCartera.tenant_id == self.tenant_id,
-                    VendedorCartera.cliente_id == cli.id,
-                    VendedorCartera.activo == True
-                ).all()
-                for old in orphan_assignments:
-                    old.activo = False
-                    old.fecha_baja = datetime.now().date()
-                    deactivated += 1
+                for a in asigs:
+                    if a.activo:
+                        deactivate_ids.append(a.id)
+                        deactivated += 1
                 continue
 
-            old_assignments = self.db.query(VendedorCartera).filter(
-                VendedorCartera.tenant_id == self.tenant_id,
-                VendedorCartera.cliente_id == cli.id,
-                VendedorCartera.empleado_obuma_id != rel_usuario_id,
-                VendedorCartera.activo == True
-            ).all()
-            for old in old_assignments:
-                old.activo = False
-                old.fecha_baja = datetime.now().date()
-                deactivated += 1
+            existe_para_vendedor = False
+            for a in asigs:
+                if a.empleado_obuma_id != rel_usuario_id and a.activo:
+                    deactivate_ids.append(a.id)
+                    deactivated += 1
+                if a.empleado_obuma_id == rel_usuario_id:
+                    # Respeta cambios manuales (no reactivar lo que Gabriel desactivó)
+                    existe_para_vendedor = True
 
-            existing = self.db.query(VendedorCartera).filter(
-                VendedorCartera.tenant_id == self.tenant_id,
-                VendedorCartera.empleado_obuma_id == rel_usuario_id,
-                VendedorCartera.cliente_id == cli.id
-            ).first()
-
-            if existing:
-                pass  # Respeta cambios manuales (no reactivar lo que Gabriel desactivó)
-            else:
-                vc = VendedorCartera(
-                    tenant_id=self.tenant_id,
-                    empleado_obuma_id=rel_usuario_id,
-                    cliente_id=cli.id,
-                    fecha_asignacion=datetime.now().date(),
-                    activo=True
-                )
-                self.db.add(vc)
+            if not existe_para_vendedor:
+                insert_mappings.append({
+                    "tenant_id": self.tenant_id,
+                    "empleado_obuma_id": rel_usuario_id,
+                    "cliente_id": cli_id,
+                    "fecha_asignacion": hoy,
+                    "activo": True,
+                })
                 added += 1
 
         try:
+            for i in range(0, len(deactivate_ids), 1000):
+                chunk = deactivate_ids[i:i + 1000]
+                self.db.query(VendedorCartera).filter(
+                    VendedorCartera.id.in_(chunk)
+                ).update(
+                    {"activo": False, "fecha_baja": hoy},
+                    synchronize_session=False,
+                )
+            if insert_mappings:
+                self.db.bulk_insert_mappings(VendedorCartera, insert_mappings)
             self.db.commit()
         except Exception:
             self.db.rollback()

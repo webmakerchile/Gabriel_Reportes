@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 
 # Candado global que serializa TODAS las sincronizaciones inmediatas de reportes.
 # Tanto los reportes de ventas (diario/semanal) como el de cartera/cobranza pasan
-# por sync_for_report. Como los lunes 06:30 el reporte diario y el de cobranza se
-# gatillan a la misma hora (y APScheduler corre los jobs en threads paralelos),
-# sin este candado ambos ejecutarian sync_ventas a la vez. Como ventas_historico
+# por sync_for_report. Los lunes el reporte de cobranza (05:30) y el diario
+# (06:30) corren cerca uno del otro (y APScheduler corre los jobs en threads
+# paralelos); si llegaran a solaparse, sin este candado ambos ejecutarian
+# sync_ventas a la vez. Como ventas_historico
 # NO tiene constraint unico (tenant_id, obuma_id), dos inserts concurrentes de la
 # misma venta nueva crearian DUPLICADOS y corromperian los totales. El candado
 # garantiza que el segundo sync espere al primero y luego solo re-confirme datos

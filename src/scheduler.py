@@ -133,9 +133,10 @@ def scheduled_sync_and_report():
 
 def weekly_saturday_reports():
     """Genera y envia reportes semanales los sabados a las 06:30 Chile.
-    Se gatilla a la misma hora del reporte de cartera (06:30) para que el
-    sync inmediato ya este hecho y los vendedores reciban los datos frescos
-    a primera hora, como pidio el cliente.
+    Se gatilla a las 06:30 para que el sync inmediato ya este hecho y los
+    vendedores reciban los datos frescos a primera hora, como pidio el cliente.
+    (El reporte de cartera del lunes corre mas temprano, a las 05:30, para
+    garantizar entrega antes de las 09:00.)
     Sync inmediato + abort-on-failure: si el sync falla NO se envia el correo."""
     logger.info("Ejecutando envio semanal de reportes (sabado 06:30)...")
     db = SessionLocal()
@@ -154,9 +155,10 @@ def weekly_saturday_reports():
 
 def daily_weekday_reports():
     """Reportes diarios automaticos lunes-viernes a las 06:30 Chile.
-    Se gatillan a la misma hora del reporte de cartera (06:30) para que el
-    sync inmediato ya este hecho y los vendedores reciban los datos frescos
-    a primera hora, como pidio el cliente.
+    Se gatillan a las 06:30 para que el sync inmediato ya este hecho y los
+    vendedores reciban los datos frescos a primera hora, como pidio el cliente.
+    (El reporte de cartera del lunes corre mas temprano, a las 05:30; el lock
+    de sync serializa ambos si llegaran a solaparse.)
     Sync inmediato + abort-on-failure: si el sync falla NO se envia el correo."""
     today = date.today()
     logger.info(f"Ejecutando envio diario de reportes ({today.strftime('%A')} 06:30)...")
@@ -174,12 +176,13 @@ def daily_weekday_reports():
 
 
 def weekly_monday_cobranza_reports():
-    """Reporte semanal de Cartera/Cobranza por vendedor, todos los lunes 06:30 Chile.
+    """Reporte semanal de Cartera/Cobranza por vendedor, todos los lunes 05:30 Chile.
 
-    Se gatilla a las 06:30 (no 09:00) para dejar ~2.5h de colchon que cubre el
-    sync inmediato con Obuma + la generacion de los 5 Excels (≈1.500 docs en
-    total). De este modo el correo LLEGA a los vendedores cerca de las 09:00,
-    que es lo que pidio el cliente.
+    El cliente exige que el correo LLEGUE ANTES de las 09:00. Se gatilla a las
+    05:30 para dejar ~3.5h de colchon que cubre el sync inmediato con Obuma +
+    la generacion de los 5 Excels (≈1.500 docs en total). Con el sync bulk de
+    clientes (Fase 6) el flujo completo deberia tardar minutos, con lo que el
+    correo llega ~06:00; el colchon cubre el peor caso.
 
     Cumple la spec del modulo "Reporte semanal de cobranza por vendedor":
     - Genera UN Excel por cada uno de los 5 vendedores trackeados con sus
@@ -194,7 +197,7 @@ def weekly_monday_cobranza_reports():
     from src.models.models import ReporteProgramado, Empleado
 
     today = date.today()
-    logger.info(f"Ejecutando envio semanal de cobranza por vendedor (lunes {today} 06:30, entrega ~09:00)...")
+    logger.info(f"Ejecutando envio semanal de cobranza por vendedor (lunes {today} 05:30, entrega antes de las 09:00)...")
 
     email_config = check_email_config()
     db = SessionLocal()
@@ -203,11 +206,11 @@ def weekly_monday_cobranza_reports():
         results = generate_all_cartera_cobranza_reports(db, report_date=today, do_sync=True)
         if not results:
             logger.error(
-                "Reporte Cobranza Lunes 06:30: sync inmediato fallo o no se generaron Excels. "
+                "Reporte Cobranza Lunes 05:30: sync inmediato fallo o no se generaron Excels. "
                 "No se envia ningun correo."
             )
             _send_sync_failure_alert(
-                "Reporte Cobranza Lunes 06:30",
+                "Reporte Cobranza Lunes 05:30",
                 Exception("generate_all_cartera_cobranza_reports retorno lista vacia"),
             )
             return
@@ -284,11 +287,11 @@ def weekly_monday_cobranza_reports():
                 )
 
         logger.info(
-            f"Reporte Cobranza Lunes 06:30: {enviados} correos enviados de {sum(1 for _, fp in results if fp)} Excels generados"
+            f"Reporte Cobranza Lunes 05:30: {enviados} correos enviados de {sum(1 for _, fp in results if fp)} Excels generados"
         )
     except Exception as e:
         logger.error(f"Error fatal en envio semanal de cobranza: {e}", exc_info=True)
-        _send_sync_failure_alert("Reporte Cobranza Lunes 06:30", e)
+        _send_sync_failure_alert("Reporte Cobranza Lunes 05:30", e)
     finally:
         db.close()
 
@@ -839,9 +842,9 @@ def start_scheduler():
     )
     scheduler.add_job(
         weekly_monday_cobranza_reports,
-        CronTrigger(day_of_week="mon", hour=6, minute=30, timezone="America/Santiago"),
+        CronTrigger(day_of_week="mon", hour=5, minute=30, timezone="America/Santiago"),
         id="weekly_monday_cobranza_reports",
-        name="Envio Semanal Cartera Cobranza por Vendedor - Lunes 06:30 Chile (entrega ~09:00)",
+        name="Envio Semanal Cartera Cobranza por Vendedor - Lunes 05:30 Chile (entrega antes de las 09:00)",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -863,7 +866,7 @@ def start_scheduler():
     logger.info(
         "Scheduler iniciado - Sync ligero diario 18:30 + "
         "Reportes Diarios Lun-Vie 06:30 + Reporte Semanal sabado 06:30 + "
-        "Cartera Cobranza por Vendedor lunes 06:30 + "
+        "Cartera Cobranza por Vendedor lunes 05:30 (entrega antes de las 09:00) + "
         "Verificacion programados cada 15 min + "
         "Monitor interno de salud cada 5 min "
         "(todos con sync inmediato + abort-on-failure)"
