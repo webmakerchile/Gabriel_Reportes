@@ -390,3 +390,79 @@ def test_bulk_maneja_mas_de_un_lote(service, db):
     assert result2["synced"] == 2500
     assert result2["skipped"] == 0
     assert db.query(ClienteFinal).count() == 2500
+
+
+# ---------------------------------------------------------------------------
+# Marcado de inactivos: clientes que ya no vienen del API
+# ---------------------------------------------------------------------------
+
+def test_clientes_ausentes_del_api_se_marcan_inactivos(service, db):
+    """Cliente en DB que Obuma ya no devuelve -> activo=False. Los presentes
+    y los que no tienen obuma_id (creados desde ventas) no se tocan."""
+    db.add_all([
+        ClienteFinal(tenant_id=service.tenant_id, obuma_id="801",
+                     rut="11.111.111-1", nombre="Presente", activo=True),
+        ClienteFinal(tenant_id=service.tenant_id, obuma_id="802",
+                     rut="22.222.222-2", nombre="Ausente", activo=True),
+        ClienteFinal(tenant_id=service.tenant_id, obuma_id=None,
+                     rut="33.333.333-3", nombre="Sin obuma id", activo=True),
+    ])
+    db.commit()
+
+    _mock_api(service, [_item("801", rut="11.111.111-1", nombre="Presente")])
+    result = _run(service)
+
+    assert result["synced"] == 1
+    assert result["skipped"] == 0
+    assert result["inactivados"] == 1
+    rows = {c.nombre: c for c in db.query(ClienteFinal).all()}
+    assert rows["Presente"].activo is True
+    assert rows["Ausente"].activo is False        # ausente -> inactivo
+    assert rows["Sin obuma id"].activo is True    # sin obuma_id: intocable
+
+
+def test_payload_vacio_no_desactiva_nada(service, db):
+    """Guardia anti-catastrofe: si Obuma devuelve payload vacio/malformado,
+    NO se marca inactivo a nadie (evita apagar el padron completo)."""
+    db.add(ClienteFinal(tenant_id=service.tenant_id, obuma_id="901",
+                        rut="11.111.111-1", nombre="Intacto", activo=True))
+    db.commit()
+
+    _mock_api(service, [])
+    result = _run(service)
+
+    assert result["synced"] == 0
+    assert result["inactivados"] == 0
+    assert db.query(ClienteFinal).filter_by(obuma_id="901").one().activo is True
+
+
+def test_ausente_ya_inactivo_no_se_recuenta(service, db):
+    """Un ausente que ya estaba inactivo no infla el contador (update
+    filtra activo=True), y sigue inactivo."""
+    db.add_all([
+        ClienteFinal(tenant_id=service.tenant_id, obuma_id="911",
+                     rut="11.111.111-1", nombre="Presente", activo=True),
+        ClienteFinal(tenant_id=service.tenant_id, obuma_id="912",
+                     rut="22.222.222-2", nombre="Ya inactivo", activo=False),
+    ])
+    db.commit()
+
+    _mock_api(service, [_item("911", rut="11.111.111-1", nombre="Presente")])
+    result = _run(service)
+
+    assert result["inactivados"] == 0
+    assert db.query(ClienteFinal).filter_by(obuma_id="912").one().activo is False
+
+
+def test_ausente_presente_en_api_aunque_sea_saltado_no_se_desactiva(service, db):
+    """Item del API sin nombre ni rut se salta del upsert, pero SI cuenta como
+    presente (su obuma_id viene en el payload) -> no se marca inactivo."""
+    db.add(ClienteFinal(tenant_id=service.tenant_id, obuma_id="921",
+                        rut="11.111.111-1", nombre="Presente raro", activo=True))
+    db.commit()
+
+    _mock_api(service, [_item("921", rut="", nombre="")])
+    result = _run(service)
+
+    assert result["inactivados"] == 0
+    assert db.query(ClienteFinal).filter_by(obuma_id="921").one().activo is True

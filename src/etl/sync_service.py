@@ -155,6 +155,11 @@ class SyncService:
         ese lote, con el mismo reintento OBU-{id} y conteo de `skipped` que la
         version anterior. Cualquier error de DB que no sea IntegrityError se
         propaga para abortar el sync (abort-on-failure aguas arriba).
+
+        Ademas, los clientes en DB (con obuma_id) que YA NO vienen en el
+        payload del API se marcan `activo=False` en batch (contador
+        `inactivados` en el retorno). Guardia: con payload vacio no se
+        desactiva nada.
         """
         data = await self.client.get_clientes_all_pages()
         if isinstance(data, dict) and "error" in data:
@@ -319,6 +324,32 @@ class SyncService:
         skipped += self._flush_clientes_mappings(update_mappings, insert_mappings)
         count -= skipped
 
+        # ── Marcado de inactivos: clientes en DB que ya no vienen del API ──
+        # Guardia: solo si el API devolvio clientes. Con payload vacio o
+        # malformado NO se toca nada (evita desactivar el padron completo por
+        # una respuesta anomala de Obuma).
+        inactivados = 0
+        if api_obuma_ids:
+            stale_pks = [
+                info["id"] for oid, info in by_obuma.items()
+                if oid not in api_obuma_ids
+            ]
+            for i in range(0, len(stale_pks), 1000):
+                chunk = stale_pks[i:i + 1000]
+                inactivados += (
+                    self.db.query(ClienteFinal)
+                    .filter(
+                        ClienteFinal.id.in_(chunk),
+                        ClienteFinal.activo.is_(True),
+                    )
+                    .update({"activo": False}, synchronize_session=False)
+                )
+            if inactivados:
+                logger.info(
+                    f"sync_clientes: {inactivados} clientes ausentes del API "
+                    f"marcados inactivos"
+                )
+
         try:
             self.db.commit()
         except Exception:
@@ -327,9 +358,12 @@ class SyncService:
         db_count = self.db.query(ClienteFinal).filter(ClienteFinal.tenant_id == self.tenant_id).count()
         # Reportamos los clientes omitidos por colision de rut irrecuperable en
         # discrepancias/detalle para no marcar un "ok" silencioso si hubo fallos.
-        detalle = (
-            f"{skipped} clientes omitidos por colision de rut" if skipped else None
-        )
+        detalle_parts = []
+        if skipped:
+            detalle_parts.append(f"{skipped} clientes omitidos por colision de rut")
+        if inactivados:
+            detalle_parts.append(f"{inactivados} clientes ausentes del API marcados inactivos")
+        detalle = "; ".join(detalle_parts) or None
         self._log_sync("clientes", len(items), db_count, skipped, detalle=detalle)
 
         cartera_result = self._sync_cartera_from_clientes()
@@ -337,6 +371,7 @@ class SyncService:
         return {
             "synced": count,
             "skipped": skipped,
+            "inactivados": inactivados,
             "total_api": len(items),
             "total_db": db_count,
             "cartera": cartera_result,
