@@ -1,3 +1,4 @@
 - [sync_clientes savepoint vs rollback](sync-savepoint-rollback.md) — per-row insert failures must use begin_nested SAVEPOINT, never db.rollback() (wipes whole run, drops clients silently → placeholder names in reports).
 - [Weekly report dual-emitter dedup](weekly-report-dual-emitter.md) — Saturday weekly had 2 senders (cron + process_scheduled_reports seed rows); dedup by dia_semana==5 filter, never deactivate the rows (hold emails_destino).
 - [Bulk upsert pattern for ETL syncs](bulk-sync-pattern.md) — per-item ORM syncs become hour-long prod bottlenecks; preload keys, resolve in memory, bulk mappings; savepoint-on-sqlite test recipe.
+- [Remote DB round-trips & disconnects](db-remote-roundtrips.md) — executemany UPDATEs are 1 round-trip/row without values_plus_batch; release session before long API fetches; retry-once on disconnect.

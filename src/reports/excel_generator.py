@@ -1194,6 +1194,8 @@ def sync_for_report(db, scope: str = "report") -> dict:
     fecha_desde = _date(today.year, 1, 1).strftime("%Y-%m-%d")
     fecha_hasta = today.strftime("%Y-%m-%d")
 
+    from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+
     service = SyncService(db)
     # Creamos un loop dedicado pero NO lo seteamos como default del thread:
     # asi evitamos dejar un loop cerrado como event_loop por defecto que
@@ -1203,6 +1205,41 @@ def sync_for_report(db, scope: str = "report") -> dict:
     loop = asyncio.new_event_loop()
     results = {}
     t0 = time.time()
+
+    def _run_step(nombre: str, coro_factory):
+        """Ejecuta un paso de sync; si la conexion a la DB se corta a mitad
+        de camino (OperationalError: 'SSL connection has been closed
+        unexpectedly', 'server closed the connection', etc.), hace rollback
+        y REINTENTA el paso completo UNA vez antes de rendirse.
+
+        Los 4 syncs son idempotentes (upsert / delete+reinsert), asi que
+        re-ejecutar el paso entero es seguro. Esto evita que un unico corte
+        de conexion transitorio aborte el envio de reportes (14/07/2026:
+        el Reporte Diario no llego a nadie por un corte asi).
+        """
+        try:
+            return loop.run_until_complete(coro_factory())
+        except DBAPIError as e:
+            # Solo reintentamos errores de CONEXION: OperationalError
+            # ("SSL connection has been closed unexpectedly", "server closed
+            # the connection..."), InterfaceError ("connection already
+            # closed") o cualquier DBAPIError con connection_invalidated.
+            # Errores de logica/datos (IntegrityError, etc.) se propagan.
+            is_disconnect = (
+                isinstance(e, (OperationalError, InterfaceError))
+                or getattr(e, "connection_invalidated", False)
+            )
+            if not is_disconnect:
+                raise
+            logger.warning(
+                f"{scope} sync {nombre}: conexion DB perdida "
+                f"({getattr(e, 'orig', None) or e}); rollback + reintento unico..."
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return loop.run_until_complete(coro_factory())
     # Serializa con cualquier otro sync de reportes en curso (ver _sync_report_lock).
     if not _sync_report_lock.acquire(blocking=False):
         logger.info(f"{scope}: otra sincronizacion en curso, esperando al candado de sync...")
@@ -1211,20 +1248,21 @@ def sync_for_report(db, scope: str = "report") -> dict:
         logger.info(f"{scope}: iniciando sync inmediato (clientes + ventas + items + cobros)...")
 
         t = time.time()
-        results["clientes"] = loop.run_until_complete(service.sync_clientes())
+        results["clientes"] = _run_step("clientes", lambda: service.sync_clientes())
         if isinstance(results["clientes"], dict) and "error" in results["clientes"]:
             raise RuntimeError(f"sync_clientes fallo: {results['clientes'].get('error')}")
         logger.info(f"{scope} sync clientes: {results['clientes'].get('synced', '?')} regs en {time.time()-t:.1f}s")
 
         t = time.time()
-        results["ventas"] = loop.run_until_complete(service.sync_ventas())
+        results["ventas"] = _run_step("ventas", lambda: service.sync_ventas())
         if isinstance(results["ventas"], dict) and "error" in results["ventas"]:
             raise RuntimeError(f"sync_ventas fallo: {results['ventas'].get('error')}")
         logger.info(f"{scope} sync ventas: {results['ventas'].get('synced', '?')} regs en {time.time()-t:.1f}s")
 
         t = time.time()
-        results["ventas_items"] = loop.run_until_complete(
-            service.sync_ventas_items_incremental(fecha_desde, fecha_hasta)
+        results["ventas_items"] = _run_step(
+            "ventas_items",
+            lambda: service.sync_ventas_items_incremental(fecha_desde, fecha_hasta),
         )
         if isinstance(results["ventas_items"], dict) and "error" in results["ventas_items"]:
             raise RuntimeError(
@@ -1236,7 +1274,7 @@ def sync_for_report(db, scope: str = "report") -> dict:
         )
 
         t = time.time()
-        results["ventas_cobros"] = loop.run_until_complete(service.sync_ventas_cobros())
+        results["ventas_cobros"] = _run_step("ventas_cobros", lambda: service.sync_ventas_cobros())
         if isinstance(results["ventas_cobros"], dict) and "error" in results["ventas_cobros"]:
             # cobros es BLOQUEANTE: sin pagos del dia los saldos POR PAGAR de
             # cartera no reflejan la realidad y los KPIs de cobranza serian

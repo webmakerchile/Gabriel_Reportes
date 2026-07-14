@@ -161,6 +161,14 @@ class SyncService:
         `inactivados` en el retorno). Guardia: con payload vacio no se
         desactiva nada.
         """
+        # Libera la conexion/transaccion de la sesion ANTES de la descarga
+        # larga del API: si quedara una transaccion abierta (autobegin de
+        # cualquier query previa), la conexion quedaria retenida e inactiva
+        # durante minutos y el servidor/NAT puede matarla ("SSL connection
+        # has been closed unexpectedly", 14/07/2026). Con la sesion limpia,
+        # la primera query post-descarga hace checkout fresco del pool con
+        # pool_pre_ping.
+        self.db.rollback()
         data = await self.client.get_clientes_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("clientes", 0, 0, 0, estado="error", detalle=str(data.get("error")))
@@ -885,6 +893,9 @@ class SyncService:
         return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_ventas(self) -> dict:
+        # Suelta la conexion antes de la descarga larga del API (ver
+        # comentario en sync_clientes): evita conexion retenida + muerta.
+        self.db.rollback()
         data = await self.client.get_ventas_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas", 0, 0, 0, estado="error", detalle=str(data.get("error")))
@@ -1039,6 +1050,12 @@ class SyncService:
         """Sync items for a date range: delete+reinsert for ventas in range. Fast bulk operation."""
         from sqlalchemy import text as sa_text
         params = {"fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta}
+        # Suelta la conexion antes de la descarga larga del API (ver
+        # comentario en sync_clientes). El 14/07/2026 este metodo fallo en
+        # produccion justo aqui: tras ~9 min descargando 163 paginas, la
+        # primera query encontro la conexion muerta y el reporte diario
+        # se aborto sin enviar correos.
+        self.db.rollback()
         data = await self.client.get_ventas_items_all_pages(params)
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas_items", 0, 0, 0, estado="error", detalle=str(data.get("error")))
@@ -1116,6 +1133,9 @@ class SyncService:
         return {"synced": count, "total_api": len(items), "total_db": count}
 
     async def sync_ventas_cobros(self) -> dict:
+        # Suelta la conexion antes de la descarga larga del API (ver
+        # comentario en sync_clientes): evita conexion retenida + muerta.
+        self.db.rollback()
         data = await self.client.get_ventas_cobros_all_pages()
         if isinstance(data, dict) and "error" in data:
             self._log_sync("ventas_cobros", 0, 0, 0, estado="error", detalle=str(data.get("error")))
